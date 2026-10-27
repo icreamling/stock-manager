@@ -148,7 +148,7 @@ async function createSheet() {
     const j = await sheets("", {
         method: "POST",
         body: JSON.stringify({
-            properties: { title: "股票投資管理站" },
+            properties: { title: "股票投資統整表" },
             sheets: [{ properties: { title: SHEET_TAB } }]
         })
     });
