@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>股票投資管理站</title>
+    <title>股票投資小天地</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Huninn&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
@@ -13,7 +13,7 @@
 <body>
     <nav class="navbar">
         <div class="nav-inner">
-            <div class="nav-title">📈 股票投資管理站</div>
+            <div class="nav-title">📈 股票投資小天地</div>
         </div>
     </nav>
     <div class="container">
@@ -105,12 +105,16 @@
                         </div>
                     </div>
                     <div>
+                        <label class="field-label" for="qty">交易股數</label>
+                        <input id="qty" type="number" min="1" step="1" placeholder="請輸入股數">
+                    </div>
+                    <div>
                         <label class="field-label" for="tradePrice" id="tradePriceLabel">買入價格</label>
                         <input id="tradePrice" type="number" min="0.0001" step="any" placeholder="請輸入成交價格">
                     </div>
                     <div>
-                        <label class="field-label" for="qty">交易股數</label>
-                        <input id="qty" type="number" min="1" step="1" placeholder="請輸入股數">
+                        <label class="field-label" for="tradeFee">手續費</label>
+                        <input id="tradeFee" type="number" min="0" step="any" value="0" placeholder="請輸入手續費，沒有則填 0">
                     </div>
                 </div>
                 <div class="sell-mode-note" id="transactionHint"></div>

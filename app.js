@@ -4,7 +4,7 @@ import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signO
 import { getFirestore, doc, getDoc, setDoc, serverTimestamp }
     from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
-/* ============ 1. 設定：換成你自己的 Firebase 網頁應用程式設定 ============ */
+/* ============ 1. 設定：Firebase 網頁應用程式設定 ============ */
 // For Firebase JS SDK v7.20.0 and later, measurementId is optional
 const firebaseConfig = {
     apiKey: "AIzaSyAg8Cjx4mHmafY0EUVnXBDIiNHzFrWUhsY",
@@ -19,7 +19,7 @@ const firebaseConfig = {
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
 const SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets";
 const SHEET_TAB = "交易紀錄";
-const HEADER = ["id", "日期", "類型", "代碼", "名稱", "成交價", "股數"];
+const HEADER = ["id", "日期", "類型", "代碼", "名稱", "成交價", "股數", "手續費"];
 
 const firebaseApp = initializeApp(firebaseConfig);
 const auth = getAuth(firebaseApp);
@@ -31,12 +31,46 @@ const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;"
 
 /* ============ 2. 狀態 ============ */
 const stockMaster = [
-    { code: "2330", name: "台積電" }, { code: "2317", name: "鴻海" }, { code: "2454", name: "聯發科" },
-    { code: "2303", name: "聯電" }, { code: "2881", name: "富邦金" }, { code: "2882", name: "國泰金" },
-    { code: "2886", name: "兆豐金" }, { code: "0050", name: "元大台灣50" }, { code: "0056", name: "元大高股息" },
-    { code: "00878", name: "國泰永續高股息" }, { code: "00919", name: "群益台灣精選高息" },
+    { code: "2330", name: "台積電" },
+    { code: "2317", name: "鴻海" },
+    { code: "2454", name: "聯發科" },
+    { code: "2303", name: "聯電" },
+    { code: "2881", name: "富邦金" },
+    { code: "2882", name: "國泰金" },
+    { code: "2886", name: "兆豐金" },
+    { code: "0050", name: "元大台灣50" },
+    { code: "0056", name: "元大高股息" },
+    { code: "00878", name: "國泰永續高股息" },
+    { code: "00919", name: "群益台灣精選高息" },
     { code: "00929", name: "復華台灣科技優息" }
 ];
+const sources = [
+    {
+        market: "上市",
+        url: "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
+    },
+    {
+        market: "上市基金",
+        url: "https://openapi.twse.com.tw/v1/opendata/t187ap47_L"
+    },
+    {
+        market: "上櫃",
+        url: "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O"
+    },
+    {
+        market: "興櫃",
+        url: "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_R"
+    },
+    {
+        market: "上櫃行情",
+        url: "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes"
+    },
+    {
+        market: "興櫃行情",
+        url: "https://www.tpex.org.tw/openapi/v1/tpex_esb_latest_statistics"
+    }
+];
+
 let user = null;
 let accessToken = null;     // 只存在記憶體，重新整理後需重新連線
 let sheetId = null;
@@ -122,27 +156,46 @@ async function createSheet() {
 }
 
 async function useSheet(id) {
-    const data = await sheets(`/${id}/values/${enc(SHEET_TAB + "!A2:G")}`);
+    const data = await sheets(`/${id}/values/${enc(SHEET_TAB + "!A2:H")}`);
+
     const rows = (data.values || []).map(r => ({
-        id: Number(r[0]), date: String(r[1] || ""), type: r[2] === "賣出" ? "sell" : "buy",
-        code: String(r[3] || ""), name: String(r[4] || ""), price: Number(r[5]), qty: Number(r[6])
-    })).filter(t => t.id > 0 && t.date && t.code && t.price > 0 && t.qty > 0);
+        id: Number(r[0]),
+        date: String(r[1] || ""),
+        type: r[2] === "賣出" ? "sell" : "buy",
+        code: String(r[3] || ""),
+        name: String(r[4] || ""),
+        price: Number(r[5]),
+        qty: Number(r[6]),
+        fee: Math.max(0, Number(r[7]) || 0)
+    })).filter(t =>
+        t.id > 0 && t.date && t.code && t.price > 0 && t.qty > 0
+    );
     transactions = rows;
     nextId = rows.reduce((m, t) => Math.max(m, t.id), 0) + 1;
     sheetId = id;
     $("sheetLink").href = "https://docs.google.com/spreadsheets/d/" + id;
     setSync("✅ 已與試算表同步");
-    updateFilterOptions(); renderStocks();
+    updateFilterOptions();
+    renderStocks();
 }
 
 async function writeSheet() {
-    const rows = transactions.map(t => [t.id, t.date, t.type === "buy" ? "買入" : "賣出", t.code, t.name, t.price, t.qty]);
+    const rows = transactions.map(t => [
+        t.id,
+        t.date,
+        t.type === "buy" ? "買入" : "賣出",
+        t.code,
+        t.name,
+        t.price,
+        t.qty,
+        Number(t.fee) || 0
+    ]);
     await sheets(`/${sheetId}/values/${enc(SHEET_TAB)}:clear`, { method: "POST", body: "{}" });
     await sheets(`/${sheetId}/values/${enc(SHEET_TAB + "!A1")}?valueInputOption=RAW`, {
         method: "PUT", body: JSON.stringify({ values: [HEADER, ...rows] })
     });
 }
-// 串接成佇列，避免連續操作時互相覆蓋
+
 function persist() {
     setSync("儲存中…");
     saveChain = saveChain.then(writeSheet).then(
@@ -243,27 +296,126 @@ function searchStock() {
     box.style.display = "block";
 }
 
-/* 移動平均成本法：買入增加股數與成本；賣出以賣出前平均成本計算已實現損益。同日交易依 id 順序。 */
+/* FIFO 先進先出法
+ * 1. 買入：建立一批持股，成本包含買入手續費
+ * 2. 賣出：依買入時間，先扣除最早買入的持股
+ * 3. 賣出損益：賣出金額 - FIFO 成本 - 賣出手續費
+ * 4. 同日交易依 id 順序處理
+ */
 function getLedger(code) {
-    const items = transactions.filter(t => t.code === code)
-        .sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id);
-    let shares = 0, cost = 0, realized = 0;
+    const items = transactions
+        .filter(t => t.code === code)
+        .sort((a, b) =>
+            a.date.localeCompare(b.date) || a.id - b.id
+        );
+
+    // 每個 lot 代表一批買入的股票
+    const lots = [];
+
+    let shares = 0;
+    let cost = 0;
+    let realized = 0;
+
     const details = {};
+
     for (const t of items) {
+        const fee = Math.max(0, Number(t.fee) || 0);
+
         if (t.type === "buy") {
-            shares += t.qty; cost += t.qty * t.price;
-            details[t.id] = { averageCostBefore: cost / shares, realizedProfit: 0, costBasis: 0 };
+            const buyCost = t.price * t.qty + fee;
+
+            lots.push({
+                id: t.id,
+                shares: t.qty,
+                unitCost: buyCost / t.qty
+            });
+
+            shares += t.qty;
+            cost += buyCost;
+
+            details[t.id] = {
+                realizedProfit: 0,
+                costBasis: buyCost,
+                fee,
+                soldShares: 0
+            };
+
         } else {
-            if (shares <= 0 || t.qty > shares) return { valid: false, shares, cost, realized };
-            const avg = cost / shares, costBasis = avg * t.qty, profit = (t.price - avg) * t.qty;
-            shares -= t.qty; cost -= costBasis;
-            if (Math.abs(shares) < 1e-8) { shares = 0; cost = 0; }
+            // 賣出股數不得超過當下持股
+            if (shares <= 0 || t.qty > shares) {
+                return {
+                    valid: false,
+                    shares,
+                    cost,
+                    realized,
+                    details
+                };
+            }
+
+            let remaining = t.qty;
+            let costBasis = 0;
+
+            // FIFO：先消耗最早買入的 lot
+            while (remaining > 0) {
+                const lot = lots[0];
+
+                if (!lot) {
+                    return {
+                        valid: false,
+                        shares,
+                        cost,
+                        realized,
+                        details
+                    };
+                }
+
+                const usedShares = Math.min(
+                    remaining,
+                    lot.shares
+                );
+
+                costBasis += usedShares * lot.unitCost;
+
+                lot.shares -= usedShares;
+                remaining -= usedShares;
+
+                if (lot.shares <= 0) {
+                    lots.shift();
+                }
+            }
+
+            const sellAmount = t.price * t.qty;
+            const profit = sellAmount - costBasis - fee;
+
+            shares -= t.qty;
+            cost -= costBasis;
             realized += profit;
-            details[t.id] = { averageCostBefore: avg, realizedProfit: profit, costBasis };
+
+            if (Math.abs(shares) < 1e-8) {
+                shares = 0;
+                cost = 0;
+                lots.length = 0;
+            }
+
+            details[t.id] = {
+                realizedProfit: profit,
+                costBasis,
+                fee,
+                soldShares: t.qty
+            };
         }
     }
-    return { valid: true, shares, cost, realized, details };
+
+    return {
+        valid: true,
+        shares,
+        cost: Math.max(0, cost),
+        realized,
+        details
+    };
 }
+
+
 function validateLedgerForCode(code, candidate) {
     const original = transactions;
     transactions = [...original, candidate];
@@ -278,6 +430,8 @@ function addTransaction() {
     const type = $("transactionType").value;
     const price = Number($("tradePrice").value);
     const qty = Number($("qty").value);
+    const feeInput = $("tradeFee").value.trim();
+    const fee = feeInput === "" ? 0 : Number(feeInput);
     const date = $("tradeDate").value;
     const code = selectedStock.code;
 
@@ -286,8 +440,11 @@ function addTransaction() {
     }
     if (!Number.isInteger(qty) || qty <= 0) { alert("請輸入大於 0 的整數股數"); return; }
     if (!date) { alert("請選擇交易日期"); return; }
-
-    const candidate = { id: nextId, code, name: selectedStock.name, type, date, price, qty };
+    if (!Number.isFinite(fee) || fee < 0) {
+        alert("手續費不可小於 0");
+        return;
+    }
+    const candidate = { id: nextId, code, name: selectedStock.name, type, date, price, qty, fee };
     const check = validateLedgerForCode(code, candidate);
     if (!check.valid) {
         alert(`這筆賣出會造成持股不足！\n依交易日期與順序，賣出前可用股數為 ${money(check.shares)} 股，不能賣出 ${money(qty)} 股。`);
@@ -295,7 +452,10 @@ function addTransaction() {
     }
     nextId++;
     transactions.push(candidate);
-    $("stockKeyword").value = ""; $("tradePrice").value = ""; $("qty").value = "";
+    $("stockKeyword").value = "";
+    $("tradePrice").value = "";
+    $("qty").value = "";
+    $("tradeFee").value = "0";
     $("tradeDate").value = todayString();
     selectedStock = null;
 
@@ -405,7 +565,12 @@ function groupStocks() {
         groups[code] = {
             code, name: items[0].name, items, shares: ledger.shares, cost: ledger.cost, value,
             realized: ledger.realized, unrealized, profit: ledger.realized + unrealized,
-            totalBuyCost: items.filter(t => t.type === "buy").reduce((s, t) => s + t.price * t.qty, 0)
+            totalBuyCost: items
+                .filter(t => t.type === "buy")
+                .reduce(
+                    (s, t) => s + t.price * t.qty + (Number(t.fee) || 0),
+                    0
+                )
         };
     });
     return groups;
@@ -468,8 +633,7 @@ function createDetailRow(group) {
     hint.textContent = "買入單筆損益顯示目前未實現損益；賣出單筆損益依賣出當時的移動平均成本計算。刪除歷史交易可能影響後續賣出的成本與損益。";
     const wrap = document.createElement("div"); wrap.className = "detail-table table-wrap";
     const table = document.createElement("table");
-    table.innerHTML = `<thead><tr><th>日期</th><th>買入／賣出</th><th>股數</th><th>成交價</th>
-        <th>單筆獲益金額</th><th>單筆獲益百分比</th><th>操作</th></tr></thead><tbody></tbody>`;
+    table.innerHTML = `<thead><tr><th>日期</th><th>買入／賣出</th> <th>股數</th> <th>成交價</th> <th>手續費</th> <th>單筆獲益金額</th> <th>單筆獲益百分比</th> <th>操作</th></tr></thead><tbody></tbody>`;
     const tbody = table.querySelector("tbody");
     const items = [...group.items].sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id);
     const ledger = getLedger(group.code);
@@ -480,18 +644,33 @@ function createDetailRow(group) {
         const info = ledger.details?.[item.id] || { realizedProfit: 0, costBasis: 0 };
         let profit, ratio;
         if (isBuy) {
-            profit = (current - item.price) * item.qty;
-            ratio = (current - item.price) / item.price * 100;
+            const buyCost = item.price * item.qty
+                + (Number(item.fee) || 0);
+
+            profit = current * item.qty - buyCost;
+            ratio = buyCost > 0
+                ? profit / buyCost * 100
+                : 0;
         } else {
             profit = info.realizedProfit;
             ratio = info.costBasis > 0 ? profit / info.costBasis * 100 : 0;
         }
         const tr = document.createElement("tr");
-        tr.innerHTML = `<td></td><td><span class="type-badge ${isBuy ? "type-buy" : "type-sell"}">${isBuy ? "🟢 買入" : "🌸 賣出"}</span></td>
-            <td>${money(item.qty)}</td><td>${money(item.price)}</td>
+        tr.innerHTML = `<td></td>
+            <td><span class="type-badge ${isBuy ? "type-buy" : "type-sell"}">
+                ${isBuy ? "🟢 買入" : "🌸 賣出"}
+            </span></td>
+            <td>${money(item.qty)}</td>
+            <td>${money(item.price)}</td>
+            <td></td>
             <td class="${profitClass(profit)}">${profit > 0 ? "+" : ""}${money(profit)}</td>
             <td class="${profitClass(ratio)}">${percent(ratio)}</td>
-            <td><button class="delete-btn" data-action="delete" data-id="${item.id}" data-code="${esc(group.code)}">刪除</button></td>`;
+            <td>
+                <button class="delete-btn"
+                    data-action="delete"
+                    data-id="${item.id}"
+                    data-code="${esc(group.code)}">刪除</button>
+            </td>`;
 
         const dateInput = document.createElement("input");
         dateInput.type = "date"; dateInput.className = "date-input"; dateInput.value = item.date;
@@ -505,6 +684,42 @@ function createDetailRow(group) {
             } else persist();
             renderStocks();
         });
+        // 手續費輸入欄：修改後立即重新計算並同步
+        const feeInput = document.createElement("input");
+        feeInput.type = "number";
+        feeInput.min = "0";
+        feeInput.step = "any";
+        feeInput.value = String(Number(item.fee) || 0);
+        feeInput.className = "fee-input";
+        feeInput.setAttribute("aria-label", "手續費");
+
+        feeInput.addEventListener("change", () => {
+            const newFee = feeInput.value.trim() === ""
+                ? 0
+                : Number(feeInput.value);
+
+            if (!Number.isFinite(newFee) || newFee < 0) {
+                alert("手續費不可小於 0");
+                feeInput.value = String(Number(item.fee) || 0);
+                return;
+            }
+
+            const oldFee = Number(item.fee) || 0;
+            item.fee = newFee;
+
+            // 避免修改買入手續費後造成後續賣出股數不足等問題
+            if (!getLedger(group.code).valid) {
+                item.fee = oldFee;
+                feeInput.value = String(oldFee);
+                alert("修改手續費後資料檢查未通過，已取消修改。");
+                return;
+            }
+
+            renderStocks();
+            persist();
+        });
+
+        tr.children[4].appendChild(feeInput);
         tr.children[0].appendChild(dateInput);
         tbody.appendChild(tr);
     });

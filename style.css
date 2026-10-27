@@ -331,12 +331,12 @@ tbody tr:last-child td {
 }
 
 .profit {
-    color: #16834A;
+    color: var(--red);
     font-weight: bold
 }
 
 .loss {
-    color: var(--red);
+    color: #16834A;
     font-weight: bold
 }
 
@@ -359,11 +359,11 @@ tbody tr:last-child td {
 }
 
 .type-buy {
-    background: var(--green)
+    background: #ff7bc1;
 }
 
 .type-sell {
-    background: var(--pink)
+    background: #5cd1f5;
 }
 
 .sell-mode-note {
@@ -600,4 +600,166 @@ tbody tr:last-child td {
         flex: 1;
         text-align: center
     }
+
+    /* 手續費輸入欄 */
+    .detail-table .fee-input {
+        width: 100px;
+        min-width: 90px;
+        margin: 0;
+        padding: 7px;
+        border: 2px solid var(--ink);
+        border-radius: 10px;
+        text-align: right;
+    }
+
+    /* 手機版持股卡片 */
+    @media (max-width: 600px) {
+        .table-wrap {
+            overflow-x: visible;
+            border: none;
+            border-radius: 0;
+        }
+
+        .table-wrap>table {
+            display: block;
+            min-width: 0;
+            width: 100%;
+            background: transparent;
+        }
+
+        .table-wrap>table>thead {
+            display: none;
+        }
+
+        .table-wrap>table>tbody {
+            display: block;
+            width: 100%;
+        }
+
+        .table-wrap>table>tbody>tr.stock-row {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0;
+            margin-bottom: 16px;
+            padding: 8px;
+            background: #fff;
+            border: 3px solid var(--ink);
+            border-radius: 20px;
+            overflow: hidden;
+        }
+
+        .table-wrap>table>tbody>tr.stock-row>td {
+            display: block;
+            min-width: 0;
+            padding: 10px 8px;
+            border-bottom: 1px solid #E7E0D5;
+            white-space: normal;
+            overflow-wrap: anywhere;
+            text-align: left;
+            font-size: 14px;
+        }
+
+        /* 明細按鈕 */
+        .table-wrap>table>tbody>tr.stock-row>td:nth-child(1) {
+            grid-column: 1 / -1;
+            text-align: right;
+            border-bottom: none;
+            padding-bottom: 4px;
+        }
+
+        /* 股票名稱 */
+        .table-wrap>table>tbody>tr.stock-row>td:nth-child(2) {
+            grid-column: 1 / -1;
+            font-size: 18px;
+            font-weight: bold;
+            text-align: left;
+            padding-top: 4px;
+        }
+
+        .table-wrap>table>tbody>tr.stock-row>td:nth-child(3)::before {
+            content: "目前持有股數";
+        }
+
+        .table-wrap>table>tbody>tr.stock-row>td:nth-child(4)::before {
+            content: "剩餘持股成本";
+        }
+
+        .table-wrap>table>tbody>tr.stock-row>td:nth-child(5)::before {
+            content: "當前總價值";
+        }
+
+        .table-wrap>table>tbody>tr.stock-row>td:nth-child(6)::before {
+            content: "累計獲益金額";
+        }
+
+        .table-wrap>table>tbody>tr.stock-row>td:nth-child(7)::before {
+            content: "獲益百分比";
+        }
+
+        .table-wrap>table>tbody>tr.stock-row>td:nth-child(n+3)::before {
+            display: block;
+            margin-bottom: 5px;
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: normal;
+        }
+
+        .table-wrap>table>tbody>tr.stock-row>td:nth-child(6),
+        .table-wrap>table>tbody>tr.stock-row>td:nth-child(7) {
+            background: #FFF9E9;
+            font-weight: bold;
+        }
+
+        /* 明細列與卡片分開 */
+        .table-wrap>table>tbody>tr.detail-row {
+            display: block;
+            margin: -8px 0 16px;
+            border: 2px dashed var(--ink);
+            border-radius: 16px;
+            overflow: hidden;
+        }
+
+        .table-wrap>table>tbody>tr.detail-row>td {
+            display: block;
+            width: 100%;
+            padding: 10px;
+            white-space: normal;
+        }
+
+        /* 交易明細保留完整欄位，橫向滑動 */
+        .detail-table {
+            max-width: 100%;
+            overflow-x: auto;
+        }
+
+        .detail-table table {
+            display: table;
+            min-width: 850px;
+            width: 850px;
+        }
+
+        .detail-table thead {
+            display: table-header-group;
+        }
+
+        .detail-table tbody {
+            display: table-row-group;
+        }
+
+        .detail-table tr {
+            display: table-row;
+        }
+
+        .detail-table th,
+        .detail-table td {
+            display: table-cell;
+            white-space: nowrap;
+        }
+
+        .detail-table .fee-input {
+            width: 95px;
+            min-width: 85px;
+        }
+    }
+
 }
