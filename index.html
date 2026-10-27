@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>股票投資管理站</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Huninn&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <nav class="navbar">
+        <div class="nav-inner">
+            <div class="nav-title">📈 股票投資管理站</div>
+        </div>
+    </nav>
+    <div class="container">
+        <div class="card hero">
+            <svg class="float" viewBox="0 0 200 200" aria-label="可愛的投資錢幣插圖">
+                <circle cx="100" cy="100" r="70" fill="#F6D27A" stroke="#3E3A39" stroke-width="3" />
+                <circle cx="75" cy="90" r="8" fill="#3E3A39" />
+                <circle cx="125" cy="90" r="8" fill="#3E3A39" />
+                <path d="M80 120 Q100 140 120 120" stroke="#3E3A39" stroke-width="4" fill="none" />
+                <text x="83" y="60" font-size="30">💰</text>
+            </svg>
+            <h1>我的投資旅程</h1>
+            <p>記錄每一筆投資，掌握持股與損益</p>
+        </div>
+
+        <!-- 未登入 -->
+        <div class="card login-card" id="loginCard">
+            <h2>歡迎使用</h2>
+            <p>請使用 Google 帳號登入。<br>你的交易紀錄會存放在「你自己的 Google 雲端硬碟」試算表中。</p>
+            <button class="google-btn" id="loginBtn">🔐 使用 Google 登入</button>
+            <p class="privacy-note">本站不儲存你的股票、股數或金額。<br>資料庫只記錄帳號識別碼與試算表 ID。</p>
+        </div>
+
+        <!-- 已登入但尚未連上試算表（重新整理後、授權過期、載入失敗） -->
+        <div class="card notice-card" id="connectCard" hidden>
+            <h2>連線你的 Google 試算表</h2>
+            <p>為了讀寫你雲端硬碟中的試算表，需要重新連線一次（不會再要求輸入密碼）。</p>
+            <button class="primary-btn" id="connectBtn">🔗 連線 Google 試算表</button>
+            <br><br><button class="ghost-btn" id="logoutBtn2">登出</button>
+        </div>
+
+        <div class="card notice-card" id="loadingCard" hidden>
+            <p>⏳ 正在讀取你的試算表…</p>
+        </div>
+
+        <!-- 登入後 -->
+        <div id="appRoot" hidden>
+            <div class="card user-bar">
+                <div class="user-info">
+                    <div>👤 <b id="userName"></b></div>
+                    <span class="sync-status" id="syncStatus">尚未同步</span>
+                </div>
+                <div class="user-actions">
+                    <a class="sheet-btn" id="sheetLink" target="_blank" rel="noopener"><button class="sheet-btn"
+                            type="button">📄 開啟試算表</button></a>
+                    <button class="ghost-btn" id="changeSheetBtn">更換／重建試算表</button>
+                    <button class="ghost-btn" id="logoutBtn">登出</button>
+                </div>
+            </div>
+
+            <div class="summary">
+                <div class="summary-card pink">
+                    <h3>目前持股成本</h3>
+                    <div id="invested">0</div>
+                </div>
+                <div class="summary-card yellow">
+                    <h3>目前持有股數</h3>
+                    <div id="stockCount">0</div>
+                </div>
+                <div class="summary-card blue">
+                    <h3>股票種類</h3>
+                    <div id="tradeCount">0</div>
+                </div>
+                <div class="summary-card green">
+                    <h3>累計損益</h3>
+                    <div id="totalProfit">0</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2 class="section-title">新增股票交易</h2>
+                <div class="form-grid">
+                    <div>
+                        <label class="field-label" for="transactionType">交易類型</label>
+                        <select id="transactionType">
+                            <option value="buy">🟢 買入</option>
+                            <option value="sell">🌸 賣出</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="field-label" for="tradeDate">交易日期</label>
+                        <input id="tradeDate" type="date">
+                    </div>
+                    <div>
+                        <label class="field-label" for="stockKeyword">股票代碼／名稱</label>
+                        <div class="search-box">
+                            <input id="stockKeyword" placeholder="例如：2330 或 台積電" autocomplete="off">
+                            <div id="searchResult" class="search-result"></div>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="field-label" for="tradePrice" id="tradePriceLabel">買入價格</label>
+                        <input id="tradePrice" type="number" min="0.0001" step="any" placeholder="請輸入成交價格">
+                    </div>
+                    <div>
+                        <label class="field-label" for="qty">交易股數</label>
+                        <input id="qty" type="number" min="1" step="1" placeholder="請輸入股數">
+                    </div>
+                </div>
+                <div class="sell-mode-note" id="transactionHint"></div>
+                <button class="primary-btn" id="addBtn">＋ 新增交易紀錄</button>
+            </div>
+
+            <div class="card">
+                <h2 class="section-title">📊 持股列表</h2>
+                <div class="table-toolbar">
+                    <div class="filter-area">
+                        <label for="stockFilter">顯示股票：</label>
+                        <select id="stockFilter">
+                            <option value="all">全部股票</option>
+                        </select>
+                    </div>
+                    <div class="price-toolbar">
+                        <button class="refresh-btn" id="refreshBtn">🔄 更新股價</button>
+                        <select id="autoRefresh" aria-label="自動更新頻率">
+                            <option value="0">手動更新</option>
+                            <option value="30000">每 30 秒</option>
+                            <option value="60000">每 1 分鐘</option>
+                            <option value="300000">每 5 分鐘</option>
+                        </select>
+                        <span class="price-status" id="priceStatus">尚未更新</span>
+                    </div>
+                </div>
+                <p class="table-hint">明細會同時顯示買入與賣出。損益採「移動平均成本法」估算，尚未扣除手續費、交易稅與其他費用。</p>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>明細</th>
+                                <th>股票代碼／名稱</th>
+                                <th>目前持有股數</th>
+                                <th>剩餘持股成本</th>
+                                <th>當前總價值</th>
+                                <th>累計獲益金額</th>
+                                <th>獲益百分比</th>
+                            </tr>
+                        </thead>
+                        <tbody id="stockList"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 必須用 type="module"，且要透過網址（Live Server / GitHub Pages）開啟，不能直接雙擊 html -->
+    <script type="module" src="app.js"></script>
+</body>
+
+</html>
