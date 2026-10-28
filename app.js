@@ -30,20 +30,8 @@ const enc = encodeURIComponent;
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 /* ============ 2. 狀態 ============ */
-const stockMaster = [
-    { code: "2330", name: "台積電" },
-    { code: "2317", name: "鴻海" },
-    { code: "2454", name: "聯發科" },
-    { code: "2303", name: "聯電" },
-    { code: "2881", name: "富邦金" },
-    { code: "2882", name: "國泰金" },
-    { code: "2886", name: "兆豐金" },
-    { code: "0050", name: "元大台灣50" },
-    { code: "0056", name: "元大高股息" },
-    { code: "00878", name: "國泰永續高股息" },
-    { code: "00919", name: "群益台灣精選高息" },
-    { code: "00929", name: "復華台灣科技優息" }
-];
+let stockMaster = [];
+
 const sources = [
     {
         market: "上市",
@@ -78,6 +66,8 @@ let initing = false;
 let selectedStock = null;
 let transactions = [];
 let currentPrices = {};
+let prevCloses = {};
+let quoteDates = {};
 let nextId = 1;
 let saveChain = Promise.resolve();
 const expandedStocks = new Set();
@@ -116,7 +106,7 @@ async function logout() {
 onAuthStateChanged(auth, u => {
     user = u;
     if (!u) {
-        accessToken = null; sheetId = null; transactions = []; currentPrices = {};
+        accessToken = null; sheetId = null; transactions = []; currentPrices = {}; prevCloses = {}; quoteDates = {};
         expandedStocks.clear(); clearInterval(autoTimer); $("autoRefresh").value = "0";
         updateFilterOptions(); renderStocks();
     } else {
@@ -213,6 +203,7 @@ async function init() {
     if (initing) return;
     initing = true; setView();
     try {
+        await loadStockMaster();
         const snap = await getDoc(userRef());
         let id = snap.exists() ? snap.data().sheetId : null;
         if (id) {
@@ -263,7 +254,7 @@ function handleTypeChange() {
     $("tradePriceLabel").textContent = selling ? "賣出成交價" : "買入價格";
     $("tradePrice").placeholder = selling ? "請輸入賣出成交價" : "請輸入買入價格";
     $("transactionHint").textContent = selling
-        ? "賣出會減少持股。系統會檢查該交易日期當下是否有足夠股數，並以移動平均成本法計算已實現損益。"
+        ? "賣出會減少持股。系統會檢查該交易日期當下是否有足夠股數，並以先進先出計算已實現損益。"
         : "買入會增加持股與成本；目前股價由股價更新功能自動取得。";
     $("qty").placeholder = selling ? "輸入要賣出的股數" : "輸入要買進的股數";
 }
@@ -294,6 +285,26 @@ function searchStock() {
         box.appendChild(div);
     }
     box.style.display = "block";
+}
+
+/* ============ 8. 股票名稱 ============ */
+async function loadStockMaster() {
+    const response = await fetch(
+        "https://stock-api.icreamling.workers.dev/"
+    );
+
+    if (!response.ok) {
+        throw new Error(`股票清單 API 失敗：HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+
+    if (!Array.isArray(data)) {
+        throw new Error("股票清單 API 回傳格式不是陣列");
+    }
+
+    stockMaster = data;
+    console.log(stockMaster)
 }
 
 /* FIFO 先進先出法
@@ -485,14 +496,21 @@ async function fetchJson(url, ms = 8000) {
     } finally { clearTimeout(timer); }
 }
 function parseMis(json) {
-    const prices = {};
+    const quotes = {};
     (json.msgArray || []).forEach(item => {
-        let p = parseFloat(item.z);
+        const prev = parseFloat(item.y);                 // 昨收
+        let p = parseFloat(item.z);                      // 當盤成交價
         if (!(p > 0)) p = parseFloat((item.b || "").split("_")[0]);
-        if (!(p > 0)) p = parseFloat(item.y);
-        if (p > 0) prices[item.c] = p;
+        if (!(p > 0)) p = prev;
+        if (!(p > 0)) return;
+        const d = String(item.d || "");                  // 例如 20261028
+        quotes[item.c] = {
+            price: p,
+            prev: prev > 0 ? prev : null,
+            date: /^\d{8}$/.test(d) ? `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}` : null
+        };
     });
-    return prices;
+    return quotes;
 }
 async function fetchFromMis(codes) {
     const exCh = codes.flatMap(c => ["tse_" + c + ".tw", "otc_" + c + ".tw"]).join("|");
@@ -514,8 +532,14 @@ async function fetchFromFinMind(code) {
         let url = `https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=${code}&start_date=${start}`;
         if (PRICE_CONFIG.finmindToken) url += "&token=" + PRICE_CONFIG.finmindToken;
         const json = await fetchJson(url);
-        const last = (json.data || []).at(-1);
-        return last && last.close > 0 ? Number(last.close) : null;
+        const rows = json.data || [];
+        const last = rows.at(-1), before = rows.at(-2);
+        if (!(last && last.close > 0)) return null;
+        return {
+            price: Number(last.close),
+            prev: before && before.close > 0 ? Number(before.close) : null,
+            date: last.date || null
+        };
     } catch (e) { console.warn("FinMind 失敗：", code, e.message); return null; }
 }
 async function refreshPrices() {
@@ -527,14 +551,18 @@ async function refreshPrices() {
     $("refreshBtn").disabled = true;
     status.className = "price-status"; status.textContent = "更新中…";
 
-    const prices = await fetchFromMis(codes);
+    const quotes = await fetchFromMis(codes);
     let usedBackup = false;
-    for (const code of codes.filter(c => !prices[c])) {
-        const p = await fetchFromFinMind(code);
-        if (p) { prices[code] = p; usedBackup = true; }
+    for (const code of codes.filter(c => !quotes[c])) {
+        const q = await fetchFromFinMind(code);
+        if (q) { quotes[code] = q; usedBackup = true; }
     }
-    Object.entries(prices).forEach(([code, p]) => { currentPrices[code] = p; });
-    const failed = codes.filter(c => !prices[c]);
+    Object.entries(quotes).forEach(([code, q]) => {
+        currentPrices[code] = q.price;
+        if (q.prev) prevCloses[code] = q.prev;
+        if (q.date) quoteDates[code] = q.date;
+    });
+    const failed = codes.filter(c => !quotes[c]);
     renderStocks();
 
     const time = new Date().toLocaleTimeString("zh-TW", { hour12: false });
@@ -562,15 +590,34 @@ function groupStocks() {
         const current = currentPrices[code] ?? 0;
         const value = ledger.shares * current;
         const unrealized = value - ledger.cost;
+
+        // 當日損益：以「行情日期」為界，之前的持股用昨收當基準，當日交易用成交價
+        const prev = prevCloses[code], quoteDate = quoteDates[code];
+        let dayPnl = null, dayBase = 0;
+        if (current > 0 && prev > 0 && quoteDate) {
+            let sharesBefore = 0, flow = 0, todayBuyCost = 0;
+            items.forEach(t => {
+                const fee = Number(t.fee) || 0;
+                if (t.date < quoteDate) {
+                    sharesBefore += t.type === "buy" ? t.qty : -t.qty;
+                } else if (t.type === "buy") {
+                    const c = t.price * t.qty + fee;
+                    flow -= c; todayBuyCost += c;
+                } else {
+                    flow += t.price * t.qty - fee;
+                }
+            });
+            dayPnl = value + flow - sharesBefore * prev;
+            dayBase = sharesBefore * prev + todayBuyCost;
+        }
+
         groups[code] = {
             code, name: items[0].name, items, shares: ledger.shares, cost: ledger.cost, value,
             realized: ledger.realized, unrealized, profit: ledger.realized + unrealized,
+            dayPnl, dayBase,
             totalBuyCost: items
                 .filter(t => t.type === "buy")
-                .reduce(
-                    (s, t) => s + t.price * t.qty + (Number(t.fee) || 0),
-                    0
-                )
+                .reduce((s, t) => s + t.price * t.qty + (Number(t.fee) || 0), 0)
         };
     });
     return groups;
@@ -599,6 +646,19 @@ function renderStocks() {
     $("tradeCount").textContent = all.length;
     $("totalProfit").textContent = (totalProfit > 0 ? "+" : "") + money(totalProfit);
     $("totalProfit").className = profitClass(totalProfit);
+    const dayList = all.filter(g => g.dayPnl !== null);
+    if (dayList.length) {
+        const dayPnl = Math.round(dayList.reduce((s, g) => s + g.dayPnl, 0) * 100) / 100;
+        const dayBase = dayList.reduce((s, g) => s + g.dayBase, 0);
+        const dayRate = dayBase > 0 ? Math.round(dayPnl / dayBase * 10000) / 100 : 0;
+        $("dayProfit").textContent = (dayPnl > 0 ? "+" : "") + money(dayPnl);
+        $("dayProfit").className = profitClass(dayPnl);
+        $("dayRate").textContent = (dayRate > 0 ? "+" : "") + percent(dayRate);
+        $("dayRate").className = profitClass(dayRate);
+    } else {
+        $("dayProfit").textContent = "—"; $("dayProfit").className = "";
+        $("dayRate").textContent = "—"; $("dayRate").className = "";
+    }
 
     const visible = all.filter(g => filter === "all" || g.code === filter);
     if (!visible.length) {
@@ -630,47 +690,39 @@ function createDetailRow(group) {
     const title = document.createElement("div"); title.className = "detail-title";
     title.textContent = `${group.code} ${group.name}｜買入／賣出交易明細`;
     const hint = document.createElement("p"); hint.className = "table-hint";
-    hint.textContent = "買入單筆損益顯示目前未實現損益；賣出單筆損益依賣出當時的移動平均成本計算。刪除歷史交易可能影響後續賣出的成本與損益。";
+    hint.textContent = "成本均價含手續費：買入為該筆買入均價，賣出為先進先出（FIFO）對應的成本均價。買入單筆損益為未實現損益；刪除歷史交易可能影響後續賣出的成本與損益。";
     const wrap = document.createElement("div"); wrap.className = "detail-table table-wrap";
     const table = document.createElement("table");
-    table.innerHTML = `<thead><tr><th>日期</th><th>買入／賣出</th> <th>股數</th> <th>成交價</th> <th>手續費</th> <th>單筆獲益金額</th> <th>單筆獲益百分比</th> <th>操作</th></tr></thead><tbody></tbody>`;
+    table.innerHTML = `<thead><tr><th>日期</th><th>買入／賣出</th><th>股數</th><th>成交價</th><th>成本均價</th><th>現價</th><th>手續費</th><th>單筆獲益金額</th><th>單筆獲益百分比</th><th>操作</th></tr></thead><tbody></tbody>`;
     const tbody = table.querySelector("tbody");
     const items = [...group.items].sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id);
     const ledger = getLedger(group.code);
+    const current = currentPrices[group.code] ?? 0;
 
     items.forEach(item => {
         const isBuy = item.type === "buy";
-        const current = currentPrices[group.code] ?? 0;
         const info = ledger.details?.[item.id] || { realizedProfit: 0, costBasis: 0 };
+        const avgCost = info.costBasis > 0 ? info.costBasis / item.qty : 0;
         let profit, ratio;
         if (isBuy) {
-            const buyCost = item.price * item.qty
-                + (Number(item.fee) || 0);
-
+            const buyCost = item.price * item.qty + (Number(item.fee) || 0);
             profit = current * item.qty - buyCost;
-            ratio = buyCost > 0
-                ? profit / buyCost * 100
-                : 0;
+            ratio = buyCost > 0 ? profit / buyCost * 100 : 0;
         } else {
             profit = info.realizedProfit;
             ratio = info.costBasis > 0 ? profit / info.costBasis * 100 : 0;
         }
         const tr = document.createElement("tr");
         tr.innerHTML = `<td></td>
-            <td><span class="type-badge ${isBuy ? "type-buy" : "type-sell"}">
-                ${isBuy ? "🟢 買入" : "🌸 賣出"}
-            </span></td>
+            <td><span class="type-badge ${isBuy ? "type-buy" : "type-sell"}">${isBuy ? "🟢 買入" : "🌸 賣出"}</span></td>
             <td>${money(item.qty)}</td>
             <td>${money(item.price)}</td>
+            <td>${avgCost > 0 ? money(avgCost) : "-"}</td>
+            <td>${current > 0 ? money(current) : "-"}</td>
             <td></td>
             <td class="${profitClass(profit)}">${profit > 0 ? "+" : ""}${money(profit)}</td>
             <td class="${profitClass(ratio)}">${percent(ratio)}</td>
-            <td>
-                <button class="delete-btn"
-                    data-action="delete"
-                    data-id="${item.id}"
-                    data-code="${esc(group.code)}">刪除</button>
-            </td>`;
+            <td><button class="delete-btn" data-action="delete" data-id="${item.id}" data-code="${esc(group.code)}">刪除</button></td>`;
 
         const dateInput = document.createElement("input");
         dateInput.type = "date"; dateInput.className = "date-input"; dateInput.value = item.date;
@@ -684,43 +736,32 @@ function createDetailRow(group) {
             } else persist();
             renderStocks();
         });
-        // 手續費輸入欄：修改後立即重新計算並同步
+
         const feeInput = document.createElement("input");
-        feeInput.type = "number";
-        feeInput.min = "0";
-        feeInput.step = "any";
+        feeInput.type = "number"; feeInput.min = "0"; feeInput.step = "any";
         feeInput.value = String(Number(item.fee) || 0);
         feeInput.className = "fee-input";
         feeInput.setAttribute("aria-label", "手續費");
-
         feeInput.addEventListener("change", () => {
-            const newFee = feeInput.value.trim() === ""
-                ? 0
-                : Number(feeInput.value);
-
+            const newFee = feeInput.value.trim() === "" ? 0 : Number(feeInput.value);
             if (!Number.isFinite(newFee) || newFee < 0) {
                 alert("手續費不可小於 0");
                 feeInput.value = String(Number(item.fee) || 0);
                 return;
             }
-
             const oldFee = Number(item.fee) || 0;
             item.fee = newFee;
-
-            // 避免修改買入手續費後造成後續賣出股數不足等問題
             if (!getLedger(group.code).valid) {
-                item.fee = oldFee;
-                feeInput.value = String(oldFee);
+                item.fee = oldFee; feeInput.value = String(oldFee);
                 alert("修改手續費後資料檢查未通過，已取消修改。");
                 return;
             }
-
             renderStocks();
             persist();
         });
 
-        tr.children[4].appendChild(feeInput);
         tr.children[0].appendChild(dateInput);
+        tr.children[6].appendChild(feeInput);   // 手續費欄位位置已改為第 7 欄（index 6）
         tbody.appendChild(tr);
     });
     wrap.appendChild(table); cell.append(title, hint, wrap); row.appendChild(cell);
@@ -756,7 +797,7 @@ $("stockList").addEventListener("click", event => {
         if (!confirm(`確定刪除 ${item.code} ${item.name} 的這筆${item.type === "buy" ? "買入" : "賣出"}交易嗎？`)) return;
         transactions = transactions.filter(t => t.id !== id);
         if (!getLedger(code).valid) alert("刪除後資料仍有持股不足問題，請檢查交易日期與順序。");
-        if (!transactions.some(t => t.code === code)) { delete currentPrices[code]; expandedStocks.delete(code); }
+        if (!transactions.some(t => t.code === code)) { delete currentPrices[code]; delete prevCloses[code]; delete quoteDates[code]; expandedStocks.delete(code); }
         updateFilterOptions(); renderStocks(); persist();
     }
 });

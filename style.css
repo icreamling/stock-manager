@@ -762,4 +762,56 @@ tbody tr:last-child td {
         }
     }
 
+    /* 當日損益卡片 */
+    .gray {
+        background: var(--gray)
+    }
+
+    @media(min-width:768px) {
+        .summary {
+            grid-template-columns: repeat(3, 1fr)
+        }
+    }
+
+    /* 明細表多了兩欄，加寬 */
+    .detail-table table {
+        min-width: 1000px
+    }
+
+    /* 日期輸入框跑版修正 */
+    .form-grid>div {
+        min-width: 0
+    }
+
+    input[type="date"] {
+        min-width: 0;
+        max-width: 100%
+    }
+
+    @media(max-width:600px) {
+        .detail-table table {
+            min-width: 1000px;
+            width: 1000px
+        }
+
+        input[type="date"] {
+            -webkit-appearance: none;
+            appearance: none;
+            display: block;
+            width: 100%;
+            min-height: 50px;
+            line-height: 1.2;
+            text-align: left
+        }
+
+        input[type="date"]::-webkit-date-and-time-value {
+            min-width: 0;
+            text-align: left
+        }
+
+        .detail-table .date-input {
+            width: 150px;
+            min-height: 0
+        }
+    }
 }

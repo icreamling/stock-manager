@@ -81,6 +81,14 @@
                     <h3>累計損益</h3>
                     <div id="totalProfit">0</div>
                 </div>
+                <div class="summary-card gray">
+                    <h3>當日總損益</h3>
+                    <div id="dayProfit">—</div>
+                </div>
+                <div class="summary-card gray">
+                    <h3>當日損益率</h3>
+                    <div id="dayRate">—</div>
+                </div>
             </div>
 
             <div class="card">
@@ -141,7 +149,7 @@
                         <span class="price-status" id="priceStatus">尚未更新</span>
                     </div>
                 </div>
-                <p class="table-hint">明細會同時顯示買入與賣出。損益採「移動平均成本法」估算，尚未扣除手續費、交易稅與其他費用。</p>
+                <p class="table-hint">明細會同時顯示買入與賣出。損益採「先進先出（FIFO）」計算，已含手續費，尚未扣除證交稅。當日損益以昨收價為基準。</p>
                 <div class="table-wrap">
                     <table>
                         <thead>
