@@ -24,9 +24,14 @@
 body {
     background: var(--bg);
     color: var(--ink);
-    padding-top: 80px
+    padding-top: 76px
 }
 
+body.has-menu {
+    padding-top: 132px
+}
+
+/* 頂端固定選單 */
 .navbar {
     position: fixed;
     top: 0;
@@ -40,14 +45,34 @@ body {
 .nav-inner {
     max-width: 1200px;
     margin: auto;
-    padding: 15px;
+    padding: 12px 15px;
     display: flex;
-    justify-content: center;
-    align-items: center
+    flex-direction: column;
+    align-items: center;
+    gap: 10px
 }
 
 .nav-title {
     font-size: 22px;
+    font-weight: bold
+}
+
+.nav-menu {
+    display: flex;
+    gap: 8px;
+    width: 100%;
+    max-width: 640px
+}
+
+.nav-tab {
+    flex: 1;
+    padding: 8px 6px;
+    font-size: 15px;
+    background: #fff
+}
+
+.nav-tab.active {
+    background: var(--yellow);
     font-weight: bold
 }
 
@@ -78,6 +103,28 @@ body {
 .hero h1 {
     font-size: 30px;
     margin: 10px 0
+}
+
+.panel-head {
+    display: flex;
+    align-items: center;
+    gap: 14px
+}
+
+.panel-head h2 {
+    margin-bottom: 4px
+}
+
+.panel-head p {
+    font-size: 14px;
+    color: var(--muted);
+    line-height: 1.6
+}
+
+.panel-art {
+    width: 92px;
+    height: 92px;
+    flex: none
 }
 
 .summary {
@@ -121,6 +168,10 @@ body {
     background: var(--green)
 }
 
+.gray {
+    background: var(--gray)
+}
+
 input,
 select {
     width: 100%;
@@ -132,6 +183,11 @@ select {
     font-size: 16px;
     background: #fff;
     color: var(--ink)
+}
+
+input[type="date"] {
+    min-width: 0;
+    max-width: 100%
 }
 
 button {
@@ -193,6 +249,10 @@ button:disabled {
     gap: 0 14px
 }
 
+.form-grid>div {
+    min-width: 0
+}
+
 .field-label {
     display: block;
     font-weight: bold;
@@ -231,7 +291,8 @@ button:disabled {
 .table-hint {
     font-size: 13px;
     color: var(--muted);
-    margin-bottom: 12px
+    margin-bottom: 12px;
+    line-height: 1.6
 }
 
 .table-wrap {
@@ -244,7 +305,7 @@ button:disabled {
 table {
     width: 100%;
     border-collapse: collapse;
-    min-width: 1050px;
+    min-width: 1250px;
     background: #fff
 }
 
@@ -304,7 +365,7 @@ tbody tr:last-child td {
 }
 
 .detail-table table {
-    min-width: 900px
+    min-width: 1300px
 }
 
 .detail-table th {
@@ -330,6 +391,16 @@ tbody tr:last-child td {
     width: 145px
 }
 
+.detail-table .fee-input {
+    width: 100px;
+    min-width: 90px;
+    margin: 0;
+    padding: 7px;
+    border: 2px solid var(--ink);
+    border-radius: 10px;
+    text-align: right
+}
+
 .profit {
     color: var(--red);
     font-weight: bold
@@ -343,7 +414,8 @@ tbody tr:last-child td {
 .empty-state {
     text-align: center;
     padding: 35px 12px;
-    color: var(--muted)
+    color: var(--muted);
+    line-height: 1.8
 }
 
 .section-title {
@@ -359,11 +431,11 @@ tbody tr:last-child td {
 }
 
 .type-buy {
-    background: #ff7bc1;
+    background: #ff7bc1
 }
 
 .type-sell {
-    background: #5cd1f5;
+    background: #5cd1f5
 }
 
 .sell-mode-note {
@@ -379,6 +451,22 @@ tbody tr:last-child td {
     animation: float 3s ease-in-out infinite
 }
 
+.left-tag {
+    display: block;
+    width: fit-content;
+    margin: 5px auto 0;
+    padding: 2px 9px;
+    font-size: 12px;
+    border: 2px solid var(--ink);
+    border-radius: 999px;
+    background: var(--yellow)
+}
+
+.left-tag.sold-out {
+    background: var(--gray);
+    color: var(--muted)
+}
+
 @keyframes float {
 
     0%,
@@ -387,7 +475,7 @@ tbody tr:last-child td {
     }
 
     50% {
-        transform: translateY(-10px)
+        transform: translateY(-8px)
     }
 }
 
@@ -501,6 +589,66 @@ tbody tr:last-child td {
     background: #fff
 }
 
+/* 折線圖 */
+.chart-toolbar {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0 14px
+}
+
+.chart-toolbar>div {
+    min-width: 0
+}
+
+.legend {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin: 4px 0 12px;
+    font-size: 14px
+}
+
+.legend span {
+    display: flex;
+    align-items: center;
+    gap: 6px
+}
+
+.dot {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--ink);
+    border-radius: 50%
+}
+
+.dot.pink {
+    background: var(--pink)
+}
+
+.dot.blue {
+    background: var(--blue)
+}
+
+.chart-box {
+    border: 3px solid var(--ink);
+    border-radius: 18px;
+    background: #FFFCF6;
+    padding: 6px;
+    overflow: hidden;
+    margin-bottom: 12px
+}
+
+.chart-box svg {
+    display: block
+}
+
+@media(min-width:768px) {
+    .summary {
+        grid-template-columns: repeat(3, 1fr)
+    }
+}
+
 @media(max-width:900px) {
     .table-toolbar {
         align-items: stretch
@@ -515,13 +663,11 @@ tbody tr:last-child td {
     }
 }
 
-@media(min-width:768px) {
-    .summary {
-        grid-template-columns: repeat(4, 1fr)
-    }
-}
-
 @media(max-width:600px) {
+    body {
+        font-size: 15px
+    }
+
     .container {
         padding: 10px
     }
@@ -535,8 +681,18 @@ tbody tr:last-child td {
         font-size: 19px
     }
 
+    .nav-tab {
+        font-size: 13px;
+        padding: 8px 2px
+    }
+
     .hero h1 {
         font-size: 25px
+    }
+
+    .panel-art {
+        width: 70px;
+        height: 70px
     }
 
     .summary-card {
@@ -601,217 +757,193 @@ tbody tr:last-child td {
         text-align: center
     }
 
-    /* 手續費輸入欄 */
-    .detail-table .fee-input {
-        width: 100px;
-        min-width: 90px;
-        margin: 0;
-        padding: 7px;
-        border: 2px solid var(--ink);
-        border-radius: 10px;
-        text-align: right;
+    /* 日期框 */
+    input[type="date"] {
+        -webkit-appearance: none;
+        appearance: none;
+        display: block;
+        width: 100%;
+        min-height: 50px;
+        line-height: 1.2;
+        text-align: left
+    }
+
+    input[type="date"]::-webkit-date-and-time-value {
+        min-width: 0;
+        text-align: left
+    }
+
+    .detail-table .date-input {
+        width: 150px;
+        min-height: 0
     }
 
     /* 手機版持股卡片 */
-    @media (max-width: 600px) {
-        .table-wrap {
-            overflow-x: visible;
-            border: none;
-            border-radius: 0;
-        }
-
-        .table-wrap>table {
-            display: block;
-            min-width: 0;
-            width: 100%;
-            background: transparent;
-        }
-
-        .table-wrap>table>thead {
-            display: none;
-        }
-
-        .table-wrap>table>tbody {
-            display: block;
-            width: 100%;
-        }
-
-        .table-wrap>table>tbody>tr.stock-row {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 0;
-            margin-bottom: 16px;
-            padding: 8px;
-            background: #fff;
-            border: 3px solid var(--ink);
-            border-radius: 20px;
-            overflow: hidden;
-        }
-
-        .table-wrap>table>tbody>tr.stock-row>td {
-            display: block;
-            min-width: 0;
-            padding: 10px 8px;
-            border-bottom: 1px solid #E7E0D5;
-            white-space: normal;
-            overflow-wrap: anywhere;
-            text-align: left;
-            font-size: 14px;
-        }
-
-        /* 明細按鈕 */
-        .table-wrap>table>tbody>tr.stock-row>td:nth-child(1) {
-            grid-column: 1 / -1;
-            text-align: right;
-            border-bottom: none;
-            padding-bottom: 4px;
-        }
-
-        /* 股票名稱 */
-        .table-wrap>table>tbody>tr.stock-row>td:nth-child(2) {
-            grid-column: 1 / -1;
-            font-size: 18px;
-            font-weight: bold;
-            text-align: left;
-            padding-top: 4px;
-        }
-
-        .table-wrap>table>tbody>tr.stock-row>td:nth-child(3)::before {
-            content: "目前持有股數";
-        }
-
-        .table-wrap>table>tbody>tr.stock-row>td:nth-child(4)::before {
-            content: "剩餘持股成本";
-        }
-
-        .table-wrap>table>tbody>tr.stock-row>td:nth-child(5)::before {
-            content: "當前總價值";
-        }
-
-        .table-wrap>table>tbody>tr.stock-row>td:nth-child(6)::before {
-            content: "累計獲益金額";
-        }
-
-        .table-wrap>table>tbody>tr.stock-row>td:nth-child(7)::before {
-            content: "獲益百分比";
-        }
-
-        .table-wrap>table>tbody>tr.stock-row>td:nth-child(n+3)::before {
-            display: block;
-            margin-bottom: 5px;
-            color: var(--muted);
-            font-size: 12px;
-            font-weight: normal;
-        }
-
-        .table-wrap>table>tbody>tr.stock-row>td:nth-child(6),
-        .table-wrap>table>tbody>tr.stock-row>td:nth-child(7) {
-            background: #FFF9E9;
-            font-weight: bold;
-        }
-
-        /* 明細列與卡片分開 */
-        .table-wrap>table>tbody>tr.detail-row {
-            display: block;
-            margin: -8px 0 16px;
-            border: 2px dashed var(--ink);
-            border-radius: 16px;
-            overflow: hidden;
-        }
-
-        .table-wrap>table>tbody>tr.detail-row>td {
-            display: block;
-            width: 100%;
-            padding: 10px;
-            white-space: normal;
-        }
-
-        /* 交易明細保留完整欄位，橫向滑動 */
-        .detail-table {
-            max-width: 100%;
-            overflow-x: auto;
-        }
-
-        .detail-table table {
-            display: table;
-            min-width: 850px;
-            width: 850px;
-        }
-
-        .detail-table thead {
-            display: table-header-group;
-        }
-
-        .detail-table tbody {
-            display: table-row-group;
-        }
-
-        .detail-table tr {
-            display: table-row;
-        }
-
-        .detail-table th,
-        .detail-table td {
-            display: table-cell;
-            white-space: nowrap;
-        }
-
-        .detail-table .fee-input {
-            width: 95px;
-            min-width: 85px;
-        }
+    .table-wrap {
+        overflow-x: visible;
+        border: none;
+        border-radius: 0
     }
 
-    /* 當日損益卡片 */
-    .gray {
-        background: var(--gray)
-    }
-
-    @media(min-width:768px) {
-        .summary {
-            grid-template-columns: repeat(3, 1fr)
-        }
-    }
-
-    /* 明細表多了兩欄，加寬 */
-    .detail-table table {
-        min-width: 1000px
-    }
-
-    /* 日期輸入框跑版修正 */
-    .form-grid>div {
-        min-width: 0
-    }
-
-    input[type="date"] {
+    .table-wrap>table {
+        display: block;
         min-width: 0;
-        max-width: 100%
+        width: 100%;
+        background: transparent
     }
 
-    @media(max-width:600px) {
-        .detail-table table {
-            min-width: 1000px;
-            width: 1000px
-        }
+    .table-wrap>table>thead {
+        display: none
+    }
 
-        input[type="date"] {
-            -webkit-appearance: none;
-            appearance: none;
-            display: block;
-            width: 100%;
-            min-height: 50px;
-            line-height: 1.2;
-            text-align: left
-        }
+    .table-wrap>table>tbody {
+        display: block;
+        width: 100%
+    }
 
-        input[type="date"]::-webkit-date-and-time-value {
-            min-width: 0;
-            text-align: left
-        }
+    .table-wrap>table>tbody>tr.stock-row {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        margin-bottom: 16px;
+        padding: 8px;
+        background: #fff;
+        border: 3px solid var(--ink);
+        border-radius: 20px;
+        overflow: hidden
+    }
 
-        .detail-table .date-input {
-            width: 150px;
-            min-height: 0
-        }
+    .table-wrap>table>tbody>tr.stock-row>td {
+        display: block;
+        min-width: 0;
+        padding: 10px 8px;
+        border-bottom: 1px solid #E7E0D5;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        text-align: left;
+        font-size: 14px
+    }
+
+    .table-wrap>table>tbody>tr.stock-row>td:nth-child(1) {
+        grid-column: 1/-1;
+        text-align: right;
+        border-bottom: none;
+        padding-bottom: 4px
+    }
+
+    .table-wrap>table>tbody>tr.stock-row>td:nth-child(2) {
+        grid-column: 1/-1;
+        font-size: 18px;
+        font-weight: bold;
+        text-align: left;
+        padding-top: 4px
+    }
+
+    .table-wrap>table>tbody>tr.stock-row>td:nth-child(3)::before {
+        content: "目前持有股數"
+    }
+
+    .table-wrap>table>tbody>tr.stock-row>td:nth-child(4)::before {
+        content: "剩餘持股成本"
+    }
+
+    .table-wrap>table>tbody>tr.stock-row>td:nth-child(5)::before {
+        content: "當前總價值"
+    }
+
+    .table-wrap>table>tbody>tr.stock-row>td:nth-child(6)::before {
+        content: "當日總損益"
+    }
+
+    .table-wrap>table>tbody>tr.stock-row>td:nth-child(7)::before {
+        content: "當日損益率"
+    }
+
+    .table-wrap>table>tbody>tr.stock-row>td:nth-child(8)::before {
+        content: "累計獲益金額"
+    }
+
+    .table-wrap>table>tbody>tr.stock-row>td:nth-child(9)::before {
+        content: "獲益百分比"
+    }
+
+    .table-wrap>table>tbody>tr.stock-row>td:nth-child(n+3)::before {
+        display: block;
+        margin-bottom: 5px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: normal
+    }
+
+    .table-wrap>table>tbody>tr.stock-row>td:nth-child(6),
+    .table-wrap>table>tbody>tr.stock-row>td:nth-child(7) {
+        background: #F6FBFE;
+        font-weight: bold
+    }
+
+    .table-wrap>table>tbody>tr.stock-row>td:nth-child(8),
+    .table-wrap>table>tbody>tr.stock-row>td:nth-child(9) {
+        background: #FFF9E9;
+        font-weight: bold
+    }
+
+    .table-wrap>table>tbody>tr.detail-row {
+        display: block;
+        margin: -8px 0 16px;
+        border: 2px dashed var(--ink);
+        border-radius: 16px;
+        overflow: hidden
+    }
+
+    .table-wrap>table>tbody>tr.detail-row>td {
+        display: block;
+        width: 100%;
+        padding: 10px;
+        white-space: normal
+    }
+
+    .table-wrap>table>tbody>tr.detail-row>td::before {
+        content: none !important
+    }
+
+    /* 交易明細保留完整欄位，橫向滑動 */
+    .chart-toolbar {
+        grid-template-columns: 1fr
+    }
+
+    .table-wrap.detail-table {
+        max-width: 100%;
+        overflow-x: auto;
+        border: 2px solid var(--ink);
+        border-radius: 12px
+    }
+
+    .table-wrap.detail-table>table {
+        display: table;
+        min-width: 1300px;
+        width: 1300px;
+        background: #fff
+    }
+
+    .table-wrap.detail-table>table>thead {
+        display: table-header-group
+    }
+
+    .table-wrap.detail-table>table>tbody {
+        display: table-row-group
+    }
+
+    .table-wrap.detail-table tr {
+        display: table-row
+    }
+
+    .table-wrap.detail-table th,
+    .table-wrap.detail-table td {
+        display: table-cell;
+        white-space: nowrap
+    }
+
+    .detail-table .fee-input {
+        width: 95px;
+        min-width: 85px
     }
 }

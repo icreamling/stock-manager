@@ -11,13 +11,21 @@
 </head>
 
 <body>
+    <!-- 頂端固定選單 -->
     <nav class="navbar">
         <div class="nav-inner">
             <div class="nav-title">📈 股票投資小天地</div>
+            <div class="nav-menu" id="navMenu" hidden>
+                <button class="nav-tab active" data-tab="summary">🐷 總覽</button>
+                <button class="nav-tab" data-tab="trade">✏️ 新增交易</button>
+                <button class="nav-tab" data-tab="list">📊 持股列表</button>
+                <button class="nav-tab" data-tab="chart">📈 折線圖</button>
+            </div>
         </div>
     </nav>
+
     <div class="container">
-        <div class="card hero">
+        <div class="card hero" id="heroCard">
             <svg class="float" viewBox="0 0 200 200" aria-label="可愛的投資錢幣插圖">
                 <circle cx="100" cy="100" r="70" fill="#F6D27A" stroke="#3E3A39" stroke-width="3" />
                 <circle cx="75" cy="90" r="8" fill="#3E3A39" />
@@ -37,7 +45,7 @@
             <p class="privacy-note">本站不儲存你的股票、股數或金額。<br>資料庫只記錄帳號識別碼與試算表 ID。</p>
         </div>
 
-        <!-- 已登入但尚未連上試算表（重新整理後、授權過期、載入失敗） -->
+        <!-- 已登入但尚未連上試算表 -->
         <div class="card notice-card" id="connectCard" hidden>
             <h2>連線你的 Google 試算表</h2>
             <p>為了讀寫你雲端硬碟中的試算表，需要重新連線一次（不會再要求輸入密碼）。</p>
@@ -57,116 +65,245 @@
                     <span class="sync-status" id="syncStatus">尚未同步</span>
                 </div>
                 <div class="user-actions">
-                    <a class="sheet-btn" id="sheetLink" target="_blank" rel="noopener"><button class="sheet-btn"
+                    <a class="sheet-link" id="sheetLink" target="_blank" rel="noopener"><button class="sheet-btn"
                             type="button">📄 開啟試算表</button></a>
                     <button class="ghost-btn" id="changeSheetBtn">更換／重建試算表</button>
                     <button class="ghost-btn" id="logoutBtn">登出</button>
                 </div>
             </div>
 
-            <div class="summary">
-                <div class="summary-card pink">
-                    <h3>目前持股成本</h3>
-                    <div id="invested">0</div>
+            <!-- a. 總覽 -->
+            <section id="panel-summary">
+                <div class="card panel-head">
+                    <svg class="panel-art float" viewBox="0 0 100 100" aria-hidden="true">
+                        <path d="M30 42 L27 27 L43 35 Z" fill="#F2A497" stroke="#3E3A39" stroke-width="3"
+                            stroke-linejoin="round" />
+                        <ellipse cx="50" cy="60" rx="32" ry="24" fill="#F2A497" stroke="#3E3A39" stroke-width="3" />
+                        <ellipse cx="82" cy="60" rx="9" ry="7" fill="#F9C9BF" stroke="#3E3A39" stroke-width="3" />
+                        <circle cx="72" cy="52" r="3" fill="#3E3A39" />
+                        <rect x="33" y="79" width="10" height="12" rx="3" fill="#F2A497" stroke="#3E3A39"
+                            stroke-width="3" />
+                        <rect x="58" y="79" width="10" height="12" rx="3" fill="#F2A497" stroke="#3E3A39"
+                            stroke-width="3" />
+                        <path d="M19 56 q-9 -2 -6 -10" fill="none" stroke="#3E3A39" stroke-width="3"
+                            stroke-linecap="round" />
+                        <circle cx="48" cy="20" r="10" fill="#F6D27A" stroke="#3E3A39" stroke-width="3" />
+                        <path d="M44 20 h8 M48 16 v8" stroke="#3E3A39" stroke-width="2.5" stroke-linecap="round" />
+                        <path d="M42 38 h12" stroke="#3E3A39" stroke-width="3" stroke-linecap="round" />
+                    </svg>
+                    <div>
+                        <h2>🐷 總覽</h2>
+                        <p>今天的小豬撲滿有多重？一眼看懂持股成本與損益。</p>
+                    </div>
                 </div>
-                <div class="summary-card yellow">
-                    <h3>目前持有股數</h3>
-                    <div id="stockCount">0</div>
+                <div class="summary">
+                    <div class="summary-card pink">
+                        <h3>目前持股成本</h3>
+                        <div id="invested">0</div>
+                    </div>
+                    <div class="summary-card yellow">
+                        <h3>目前持有股數</h3>
+                        <div id="stockCount">0</div>
+                    </div>
+                    <div class="summary-card blue">
+                        <h3>股票種類</h3>
+                        <div id="tradeCount">0</div>
+                    </div>
+                    <div class="summary-card green">
+                        <h3>累計損益</h3>
+                        <div id="totalProfit">0</div>
+                    </div>
+                    <div class="summary-card gray">
+                        <h3>當日總損益</h3>
+                        <div id="dayProfit">—</div>
+                    </div>
+                    <div class="summary-card gray">
+                        <h3>當日損益率</h3>
+                        <div id="dayRate">—</div>
+                    </div>
                 </div>
-                <div class="summary-card blue">
-                    <h3>股票種類</h3>
-                    <div id="tradeCount">0</div>
-                </div>
-                <div class="summary-card green">
-                    <h3>累計損益</h3>
-                    <div id="totalProfit">0</div>
-                </div>
-                <div class="summary-card gray">
-                    <h3>當日總損益</h3>
-                    <div id="dayProfit">—</div>
-                </div>
-                <div class="summary-card gray">
-                    <h3>當日損益率</h3>
-                    <div id="dayRate">—</div>
-                </div>
-            </div>
+            </section>
 
-            <div class="card">
-                <h2 class="section-title">新增股票交易</h2>
-                <div class="form-grid">
-                    <div>
-                        <label class="field-label" for="transactionType">交易類型</label>
-                        <select id="transactionType">
-                            <option value="buy">🟢 買入</option>
-                            <option value="sell">🌸 賣出</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="field-label" for="tradeDate">交易日期</label>
-                        <input id="tradeDate" type="date">
-                    </div>
-                    <div>
-                        <label class="field-label" for="stockKeyword">股票代碼／名稱</label>
-                        <div class="search-box">
-                            <input id="stockKeyword" placeholder="例如：2330 或 台積電" autocomplete="off">
-                            <div id="searchResult" class="search-result"></div>
+            <!-- b. 新增股票交易 -->
+            <section id="panel-trade" hidden>
+                <div class="card">
+                    <div class="panel-head">
+                        <svg class="panel-art float" viewBox="0 0 100 100" aria-hidden="true">
+                            <rect x="16" y="14" width="54" height="72" rx="9" fill="#A8D3E6" stroke="#3E3A39"
+                                stroke-width="3" />
+                            <path d="M28 34 h30 M28 47 h30 M28 60 h18" stroke="#3E3A39" stroke-width="3"
+                                stroke-linecap="round" />
+                            <g transform="rotate(32 74 58)">
+                                <rect x="68" y="30" width="13" height="44" rx="3" fill="#F6D27A" stroke="#3E3A39"
+                                    stroke-width="3" />
+                                <path d="M68 74 l6.5 13 l6.5 -13 z" fill="#F2A497" stroke="#3E3A39" stroke-width="3"
+                                    stroke-linejoin="round" />
+                            </g>
+                        </svg>
+                        <div>
+                            <h2>✏️ 新增股票交易</h2>
+                            <p>買了還是賣了？把這一筆記在小本本裡吧。</p>
                         </div>
                     </div>
-                    <div>
-                        <label class="field-label" for="qty">交易股數</label>
-                        <input id="qty" type="number" min="1" step="1" placeholder="請輸入股數">
+                    <div class="form-grid">
+                        <div>
+                            <label class="field-label" for="transactionType">交易類型</label>
+                            <select id="transactionType">
+                                <option value="buy">🟢 買入</option>
+                                <option value="sell">🌸 賣出</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="field-label" for="tradeDate">交易日期</label>
+                            <input id="tradeDate" type="date">
+                        </div>
+                        <div>
+                            <label class="field-label" for="stockKeyword">股票代碼／名稱</label>
+                            <div class="search-box">
+                                <input id="stockKeyword" placeholder="例如：2330 或 台積電" autocomplete="off">
+                                <div id="searchResult" class="search-result"></div>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="field-label" for="qty">交易股數</label>
+                            <input id="qty" type="number" min="1" step="1" placeholder="請輸入股數">
+                        </div>
+                        <div>
+                            <label class="field-label" for="tradePrice" id="tradePriceLabel">買入價格</label>
+                            <input id="tradePrice" type="number" min="0.0001" step="any" placeholder="請輸入成交價格">
+                        </div>
+                        <div>
+                            <label class="field-label" for="tradeFee">手續費</label>
+                            <input id="tradeFee" type="number" min="0" step="any" value="0" placeholder="請輸入手續費，沒有則填 0">
+                        </div>
                     </div>
-                    <div>
-                        <label class="field-label" for="tradePrice" id="tradePriceLabel">買入價格</label>
-                        <input id="tradePrice" type="number" min="0.0001" step="any" placeholder="請輸入成交價格">
-                    </div>
-                    <div>
-                        <label class="field-label" for="tradeFee">手續費</label>
-                        <input id="tradeFee" type="number" min="0" step="any" value="0" placeholder="請輸入手續費，沒有則填 0">
-                    </div>
+                    <div class="sell-mode-note" id="transactionHint"></div>
+                    <button class="primary-btn" id="addBtn">＋ 新增交易紀錄</button>
                 </div>
-                <div class="sell-mode-note" id="transactionHint"></div>
-                <button class="primary-btn" id="addBtn">＋ 新增交易紀錄</button>
-            </div>
+            </section>
 
-            <div class="card">
-                <h2 class="section-title">📊 持股列表</h2>
-                <div class="table-toolbar">
-                    <div class="filter-area">
-                        <label for="stockFilter">顯示股票：</label>
-                        <select id="stockFilter">
-                            <option value="all">全部股票</option>
-                        </select>
+            <!-- c. 持股列表 -->
+            <section id="panel-list" hidden>
+                <div class="card">
+                    <div class="panel-head">
+                        <svg class="panel-art float" viewBox="0 0 100 100" aria-hidden="true">
+                            <rect x="12" y="58" width="20" height="28" rx="5" fill="#B9DAA5" stroke="#3E3A39"
+                                stroke-width="3" />
+                            <rect x="40" y="38" width="20" height="48" rx="5" fill="#F6D27A" stroke="#3E3A39"
+                                stroke-width="3" />
+                            <rect x="68" y="16" width="20" height="70" rx="5" fill="#F2A497" stroke="#3E3A39"
+                                stroke-width="3" />
+                            <circle cx="74" cy="38" r="2.5" fill="#3E3A39" />
+                            <circle cx="82" cy="38" r="2.5" fill="#3E3A39" />
+                            <path d="M74 46 Q78 51 82 46" fill="none" stroke="#3E3A39" stroke-width="2.5"
+                                stroke-linecap="round" />
+                            <path d="M8 90 H92" stroke="#3E3A39" stroke-width="3" stroke-linecap="round" />
+                        </svg>
+                        <div>
+                            <h2>📊 持股列表</h2>
+                            <p>每檔股票的成本、市值與損益，點「明細」看每一筆。</p>
+                        </div>
                     </div>
-                    <div class="price-toolbar">
-                        <button class="refresh-btn" id="refreshBtn">🔄 更新股價</button>
-                        <select id="autoRefresh" aria-label="自動更新頻率">
-                            <option value="0">手動更新</option>
-                            <option value="30000">每 30 秒</option>
-                            <option value="60000">每 1 分鐘</option>
-                            <option value="300000">每 5 分鐘</option>
-                        </select>
-                        <span class="price-status" id="priceStatus">尚未更新</span>
+                    <div class="table-toolbar">
+                        <div class="filter-area">
+                            <label for="stockFilter">顯示股票：</label>
+                            <select id="stockFilter">
+                                <option value="all">全部股票</option>
+                            </select>
+                        </div>
+                        <div class="price-toolbar">
+                            <button class="refresh-btn" id="refreshBtn">🔄 更新股價</button>
+                            <select id="autoRefresh" aria-label="自動更新頻率">
+                                <option value="0">手動更新</option>
+                                <option value="30000">每 30 秒（僅盤中）</option>
+                                <option value="60000">每 1 分鐘（僅盤中）</option>
+                                <option value="300000">每 5 分鐘（僅盤中）</option>
+                            </select>
+                            <span class="price-status" id="priceStatus">尚未更新</span>
+                        </div>
+                    </div>
+                    <p class="table-hint">損益採「先進先出（FIFO）」計算，已含手續費，尚未扣除證交稅。當日損益以昨收價為基準。盤中（週一至週五
+                        09:00–13:30）使用即時行情，其餘時間使用收盤資料。</p>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>明細</th>
+                                    <th>股票代碼／名稱</th>
+                                    <th>目前持有股數</th>
+                                    <th>剩餘持股成本</th>
+                                    <th>當前總價值</th>
+                                    <th>當日總損益</th>
+                                    <th>當日損益率</th>
+                                    <th>累計獲益金額</th>
+                                    <th>獲益百分比</th>
+                                </tr>
+                            </thead>
+                            <tbody id="stockList"></tbody>
+                        </table>
                     </div>
                 </div>
-                <p class="table-hint">明細會同時顯示買入與賣出。損益採「先進先出（FIFO）」計算，已含手續費，尚未扣除證交稅。當日損益以昨收價為基準。</p>
-                <div class="table-wrap">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>明細</th>
-                                <th>股票代碼／名稱</th>
-                                <th>目前持有股數</th>
-                                <th>剩餘持股成本</th>
-                                <th>當前總價值</th>
-                                <th>累計獲益金額</th>
-                                <th>獲益百分比</th>
-                            </tr>
-                        </thead>
-                        <tbody id="stockList"></tbody>
-                    </table>
+            </section>
+
+            <!-- d. 折線圖 -->
+            <section id="panel-chart" hidden>
+                <div class="card">
+                    <div class="panel-head">
+                        <svg class="panel-art float" viewBox="0 0 100 100" aria-hidden="true">
+                            <rect x="10" y="14" width="80" height="68" rx="12" fill="#fff" stroke="#3E3A39"
+                                stroke-width="3" />
+                            <path d="M20 66 L38 48 L54 58 L78 28" fill="none" stroke="#F2A497" stroke-width="4.5"
+                                stroke-linecap="round" stroke-linejoin="round" />
+                            <circle cx="20" cy="66" r="4.5" fill="#F6D27A" stroke="#3E3A39" stroke-width="2.5" />
+                            <circle cx="38" cy="48" r="4.5" fill="#A8D3E6" stroke="#3E3A39" stroke-width="2.5" />
+                            <circle cx="54" cy="58" r="4.5" fill="#B9DAA5" stroke="#3E3A39" stroke-width="2.5" />
+                            <circle cx="78" cy="28" r="4.5" fill="#F2A497" stroke="#3E3A39" stroke-width="2.5" />
+                            <path d="M30 90 H70" stroke="#3E3A39" stroke-width="3" stroke-linecap="round" />
+                        </svg>
+                        <div>
+                            <h2>📈 資產折線圖</h2>
+                            <p>每天的持股快照會存在你的試算表，這裡畫成折線。</p>
+                        </div>
+                    </div>
+
+                    <div class="chart-toolbar">
+                        <div>
+                            <label class="field-label" for="chartStock">顯示股票</label>
+                            <select id="chartStock">
+                                <option value="ALL">全部合計</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="field-label" for="chartMetric">指標</label>
+                            <select id="chartMetric">
+                                <option value="profit">累計獲益金額</option>
+                                <option value="ratio">獲益百分比</option>
+                                <option value="value">當前總價值</option>
+                                <option value="cost">剩餘持股成本</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="field-label" for="chartRange">時間範圍</label>
+                            <select id="chartRange">
+                                <option value="0">全部</option>
+                                <option value="30">近 30 天</option>
+                                <option value="90">近 90 天</option>
+                                <option value="365">近 1 年</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="legend">
+                        <span><i class="dot pink"></i>含已賣出</span>
+                        <span><i class="dot blue"></i>未含已賣出（虛線）</span>
+                    </div>
+                    <div class="chart-box" id="chartBox"></div>
+                    <div class="sell-mode-note" id="chartInfo">點一下圖上的圓點，可以看到當天的數字。</div>
+                    <p class="table-hint">
+                        「含已賣出」：把賣掉的部分也算進去，成本＝累計買入成本，總價值＝持股市值＋賣出實收金額，累計獲益＝已實現＋未實現（包含已全數賣出的股票）。「未含已賣出」：只看目前仍持有的部分，成本為剩餘持股成本，總價值為持股市值，獲益為未實現損益。每次更新股價成功後會寫入當日快照，同一天會覆蓋，以當天最後一次為準。
+                    </p>
                 </div>
-            </div>
+            </section>
         </div>
     </div>
 

@@ -4,8 +4,7 @@ import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signO
 import { getFirestore, doc, getDoc, setDoc, serverTimestamp }
     from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
-/* ============ 1. 設定：Firebase 網頁應用程式設定 ============ */
-// For Firebase JS SDK v7.20.0 and later, measurementId is optional
+/* ============ 1. 設定 ============ */
 const firebaseConfig = {
     apiKey: "AIzaSyAg8Cjx4mHmafY0EUVnXBDIiNHzFrWUhsY",
     authDomain: "stock-65e2a.firebaseapp.com",
@@ -19,7 +18,22 @@ const firebaseConfig = {
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
 const SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets";
 const SHEET_TAB = "交易紀錄";
+const SNAP_TAB = "持股總表紀錄";
 const HEADER = ["id", "日期", "類型", "代碼", "名稱", "成交價", "股數", "手續費"];
+const SNAP_HEADER = ["日期", "範圍", "代碼", "名稱", "持有股數", "剩餘持股成本", "當前總價值", "累計獲益金額", "獲益百分比"];
+const SCOPE_ALL = "含已賣出";
+const SCOPE_HELD = "未含已賣出";
+
+// 你自己的 Cloudflare Worker（股票清單在根路徑；/quote 盤中即時、/close 收盤資料，見 worker.js）
+const WORKER_URL = "https://stock-api.icreamling.workers.dev";
+const PRICE_CONFIG = {
+    workerUrl: WORKER_URL,
+    finmindToken: "",   // 選填：FinMind token
+    corsProxies: [      // Worker 的 /quote 失敗時的備援
+        u => "https://corsproxy.io/?url=" + encodeURIComponent(u),
+        u => "https://api.allorigins.win/raw?url=" + encodeURIComponent(u)
+    ]
+};
 
 const firebaseApp = initializeApp(firebaseConfig);
 const auth = getAuth(firebaseApp);
@@ -28,57 +42,46 @@ const db = getFirestore(firebaseApp);
 const $ = id => document.getElementById(id);
 const enc = encodeURIComponent;
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const r2 = v => Math.round((Number(v) || 0) * 100) / 100;
 
 /* ============ 2. 狀態 ============ */
 let stockMaster = [];
-
-const sources = [
-    {
-        market: "上市",
-        url: "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
-    },
-    {
-        market: "上市基金",
-        url: "https://openapi.twse.com.tw/v1/opendata/t187ap47_L"
-    },
-    {
-        market: "上櫃",
-        url: "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O"
-    },
-    {
-        market: "興櫃",
-        url: "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_R"
-    },
-    {
-        market: "上櫃行情",
-        url: "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes"
-    },
-    {
-        market: "興櫃行情",
-        url: "https://www.tpex.org.tw/openapi/v1/tpex_esb_latest_statistics"
-    }
-];
-
 let user = null;
 let accessToken = null;     // 只存在記憶體，重新整理後需重新連線
 let sheetId = null;
 let initing = false;
 let selectedStock = null;
 let transactions = [];
-let currentPrices = {};
-let prevCloses = {};
-let quoteDates = {};
+let snapshots = [];         // 每日快照（來自「持股總表紀錄」分頁）
+let currentPrices = {}, prevCloses = {}, quoteDates = {};
 let nextId = 1;
 let saveChain = Promise.resolve();
+let refreshing = false, autoTimer = null, lastSnapWrite = 0;
 const expandedStocks = new Set();
+const TOKEN_KEY = "stock_gtoken";
+const TOKEN_TTL = 55 * 60 * 1000;   // Google token 約 1 小時，提早 5 分鐘作廢
 
-/* ============ 3. 畫面狀態切換 ============ */
+/* ============ 3. 畫面狀態與頁籤 ============ */
+const TABS = ["summary", "trade", "list", "chart"];
 function setView() {
     const ready = !!(user && accessToken && sheetId);
+    const showApp = ready && !initing;
     $("loginCard").hidden = !!user;
+    $("heroCard").hidden = showApp;
     $("loadingCard").hidden = !(user && initing);
     $("connectCard").hidden = !(user && !initing && !ready);
-    $("appRoot").hidden = !(ready && !initing);
+    $("appRoot").hidden = !showApp;
+    $("navMenu").hidden = !showApp;
+    document.body.classList.toggle("has-menu", showApp);
+    if (showApp) renderChart();
+}
+function showTab(name) {
+    if (!TABS.includes(name)) name = "summary";
+    TABS.forEach(t => { $("panel-" + t).hidden = t !== name; });
+    document.querySelectorAll(".nav-tab").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
+    window.scrollTo({ top: 0 });
+    try { history.replaceState(null, "", "#" + name); } catch { }
+    if (name === "chart") renderChart();
 }
 function setSync(msg, isError = false) {
     $("syncStatus").textContent = msg;
@@ -86,6 +89,20 @@ function setSync(msg, isError = false) {
 }
 
 /* ============ 4. 登入 / 登出 ============ */
+function saveToken(token) {
+    try { sessionStorage.setItem(TOKEN_KEY, JSON.stringify({ token, uid: user?.uid, exp: Date.now() + TOKEN_TTL })); } catch { }
+}
+function loadToken(uid) {
+    try {
+        const t = JSON.parse(sessionStorage.getItem(TOKEN_KEY) || "null");
+        if (t && t.uid === uid && t.exp > Date.now()) return t.token;
+    } catch { }
+    clearToken();
+    return null;
+}
+function clearToken() {
+    try { sessionStorage.removeItem(TOKEN_KEY); } catch { }
+}
 async function login() {
     try {
         const provider = new GoogleAuthProvider();
@@ -93,24 +110,28 @@ async function login() {
         const result = await signInWithPopup(auth, provider);
         user = result.user;
         accessToken = GoogleAuthProvider.credentialFromResult(result)?.accessToken || null;
-        if (accessToken) await init(); else setView();
+        if (accessToken) { saveToken(accessToken); await init(); } else setView();
     } catch (e) {
         if (e.code !== "auth/popup-closed-by-user" && e.code !== "auth/cancelled-popup-request") {
             alert("登入失敗：" + e.message);
         }
     }
 }
-async function logout() {
-    await signOut(auth);
-}
+async function logout() { await signOut(auth); }
 onAuthStateChanged(auth, u => {
     user = u;
     if (!u) {
-        accessToken = null; sheetId = null; transactions = []; currentPrices = {}; prevCloses = {}; quoteDates = {};
+        clearToken();
+        accessToken = null; sheetId = null; transactions = []; snapshots = [];
+        currentPrices = {}; prevCloses = {}; quoteDates = {}; lastSnapWrite = 0;
         expandedStocks.clear(); clearInterval(autoTimer); $("autoRefresh").value = "0";
+        $("chartStock").dataset.sig = "";
         updateFilterOptions(); renderStocks();
     } else {
         $("userName").textContent = u.displayName || u.email || "已登入";
+        // 重新整理後，用暫存的 token 直接連回試算表
+        if (!accessToken) accessToken = loadToken(u.uid);
+        if (accessToken && !sheetId && !initing) { setView(); init(); return; }
     }
     setView();
 });
@@ -122,7 +143,7 @@ async function sheets(path, options = {}) {
         headers: { Authorization: "Bearer " + accessToken, "Content-Type": "application/json" }
     });
     if (res.status === 401) {
-        accessToken = null; setView();
+        accessToken = null; clearToken(); setView();
         throw new Error("Google 授權已過期，請重新連線");
     }
     if (!res.ok) {
@@ -139,15 +160,27 @@ async function createSheet() {
         method: "POST",
         body: JSON.stringify({
             properties: { title: "股票投資統整表" },
-            sheets: [{ properties: { title: SHEET_TAB } }]
+            sheets: [{ properties: { title: SHEET_TAB } }, { properties: { title: SNAP_TAB } }]
         })
     });
     return j.spreadsheetId;
 }
 
-async function useSheet(id) {
-    const data = await sheets(`/${id}/values/${enc(SHEET_TAB + "!A2:H")}`);
+// 舊版試算表沒有快照分頁時，自動補上
+async function ensureSnapTab(id) {
+    const meta = await sheets(`/${id}?fields=sheets.properties.title`);
+    const has = (meta.sheets || []).some(s => s.properties?.title === SNAP_TAB);
+    if (!has) {
+        await sheets(`/${id}:batchUpdate`, {
+            method: "POST",
+            body: JSON.stringify({ requests: [{ addSheet: { properties: { title: SNAP_TAB } } }] })
+        });
+    }
+}
 
+async function useSheet(id) {
+    await ensureSnapTab(id);
+    const data = await sheets(`/${id}/values/${enc(SHEET_TAB + "!A2:H")}`);
     const rows = (data.values || []).map(r => ({
         id: Number(r[0]),
         date: String(r[1] || ""),
@@ -157,12 +190,20 @@ async function useSheet(id) {
         price: Number(r[5]),
         qty: Number(r[6]),
         fee: Math.max(0, Number(r[7]) || 0)
-    })).filter(t =>
-        t.id > 0 && t.date && t.code && t.price > 0 && t.qty > 0
-    );
+    })).filter(t => t.id > 0 && t.date && t.code && t.price > 0 && t.qty > 0);
+
+    const snapData = await sheets(`/${id}/values/${enc(SNAP_TAB + "!A2:I")}`);
+    const snaps = (snapData.values || []).map(r => ({
+        date: String(r[0] || ""), scope: String(r[1] || ""), code: String(r[2] || ""), name: String(r[3] || ""),
+        shares: Number(r[4]) || 0, cost: Number(r[5]) || 0, value: Number(r[6]) || 0,
+        profit: Number(r[7]) || 0, ratio: Number(r[8]) || 0
+    })).filter(s => s.date && s.code && (s.scope === SCOPE_ALL || s.scope === SCOPE_HELD));
+
     transactions = rows;
+    snapshots = snaps;
     nextId = rows.reduce((m, t) => Math.max(m, t.id), 0) + 1;
     sheetId = id;
+    $("chartStock").dataset.sig = "";
     $("sheetLink").href = "https://docs.google.com/spreadsheets/d/" + id;
     setSync("✅ 已與試算表同步");
     updateFilterOptions();
@@ -171,26 +212,34 @@ async function useSheet(id) {
 
 async function writeSheet() {
     const rows = transactions.map(t => [
-        t.id,
-        t.date,
-        t.type === "buy" ? "買入" : "賣出",
-        t.code,
-        t.name,
-        t.price,
-        t.qty,
-        Number(t.fee) || 0
+        t.id, t.date, t.type === "buy" ? "買入" : "賣出", t.code, t.name, t.price, t.qty, Number(t.fee) || 0
     ]);
     await sheets(`/${sheetId}/values/${enc(SHEET_TAB)}:clear`, { method: "POST", body: "{}" });
     await sheets(`/${sheetId}/values/${enc(SHEET_TAB + "!A1")}?valueInputOption=RAW`, {
         method: "PUT", body: JSON.stringify({ values: [HEADER, ...rows] })
     });
 }
+async function writeSnapshots() {
+    const rows = snapshots.map(s => [s.date, s.scope, s.code, s.name, s.shares, s.cost, s.value, s.profit, s.ratio]);
+    await sheets(`/${sheetId}/values/${enc(SNAP_TAB)}:clear`, { method: "POST", body: "{}" });
+    await sheets(`/${sheetId}/values/${enc(SNAP_TAB + "!A1")}?valueInputOption=RAW`, {
+        method: "PUT", body: JSON.stringify({ values: [SNAP_HEADER, ...rows] })
+    });
+}
 
+// 所有寫入都串成佇列，避免連續操作時互相覆蓋
 function persist() {
     setSync("儲存中…");
     saveChain = saveChain.then(writeSheet).then(
         () => setSync("✅ 已同步 " + new Date().toLocaleTimeString("zh-TW", { hour12: false })),
         e => setSync("⚠️ 儲存失敗：" + e.message, true)
+    );
+    return saveChain;
+}
+function persistSnapshots() {
+    saveChain = saveChain.then(writeSnapshots).then(
+        () => { lastSnapWrite = Date.now(); },
+        e => setSync("⚠️ 快照儲存失敗：" + e.message, true)
     );
     return saveChain;
 }
@@ -203,7 +252,8 @@ async function init() {
     if (initing) return;
     initing = true; setView();
     try {
-        await loadStockMaster();
+        try { await loadStockMaster(); }
+        catch (e) { console.warn(e); alert("股票清單載入失敗，暫時無法搜尋股票：" + e.message); }
         const snap = await getDoc(userRef());
         let id = snap.exists() ? snap.data().sheetId : null;
         if (id) {
@@ -248,14 +298,15 @@ function todayString() {
 function money(v) { return Number(v).toLocaleString("zh-TW", { minimumFractionDigits: 0, maximumFractionDigits: 2 }); }
 function percent(v) { return Number(v).toLocaleString("zh-TW", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "%"; }
 function profitClass(v) { return v > 0 ? "profit" : v < 0 ? "loss" : ""; }
+const signed = v => (v > 0 ? "+" : "") + money(v);
 
 function handleTypeChange() {
     const selling = $("transactionType").value === "sell";
     $("tradePriceLabel").textContent = selling ? "賣出成交價" : "買入價格";
     $("tradePrice").placeholder = selling ? "請輸入賣出成交價" : "請輸入買入價格";
     $("transactionHint").textContent = selling
-        ? "賣出會減少持股。系統會檢查該交易日期當下是否有足夠股數，並以先進先出計算已實現損益。"
-        : "買入會增加持股與成本；目前股價由股價更新功能自動取得。";
+        ? "賣出會減少持股。系統會檢查該交易日期當下是否有足夠股數，並以先進先出（FIFO）計算已實現損益。"
+        : "買入會增加持股與成本（含手續費）；目前股價由股價更新功能自動取得。";
     $("qty").placeholder = selling ? "輸入要賣出的股數" : "輸入要買進的股數";
 }
 
@@ -287,146 +338,53 @@ function searchStock() {
     box.style.display = "block";
 }
 
-/* ============ 8. 股票名稱 ============ */
 async function loadStockMaster() {
-    const response = await fetch(
-        "https://stock-api.icreamling.workers.dev/"
-    );
-
-    if (!response.ok) {
-        throw new Error(`股票清單 API 失敗：HTTP ${response.status}`);
-    }
-
+    const response = await fetch(WORKER_URL + "/");
+    if (!response.ok) throw new Error(`股票清單 API 失敗：HTTP ${response.status}`);
     const data = await response.json();
-
-    if (!Array.isArray(data)) {
-        throw new Error("股票清單 API 回傳格式不是陣列");
-    }
-
+    if (!Array.isArray(data)) throw new Error("股票清單 API 回傳格式不是陣列");
     stockMaster = data;
-    console.log(stockMaster)
 }
 
 /* FIFO 先進先出法
- * 1. 買入：建立一批持股，成本包含買入手續費
- * 2. 賣出：依買入時間，先扣除最早買入的持股
- * 3. 賣出損益：賣出金額 - FIFO 成本 - 賣出手續費
- * 4. 同日交易依 id 順序處理
+ * 買入：建立一批持股，成本包含買入手續費
+ * 賣出：先扣除最早買入的持股；損益＝賣出金額 − FIFO 成本 − 賣出手續費
+ * 同日交易依 id 順序處理
  */
 function getLedger(code) {
-    const items = transactions
-        .filter(t => t.code === code)
-        .sort((a, b) =>
-            a.date.localeCompare(b.date) || a.id - b.id
-        );
-
-    // 每個 lot 代表一批買入的股票
+    const items = transactions.filter(t => t.code === code)
+        .sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id);
     const lots = [];
-
-    let shares = 0;
-    let cost = 0;
-    let realized = 0;
-
+    let shares = 0, cost = 0, realized = 0;
     const details = {};
 
     for (const t of items) {
         const fee = Math.max(0, Number(t.fee) || 0);
-
         if (t.type === "buy") {
             const buyCost = t.price * t.qty + fee;
-
-            lots.push({
-                id: t.id,
-                shares: t.qty,
-                unitCost: buyCost / t.qty
-            });
-
-            shares += t.qty;
-            cost += buyCost;
-
-            details[t.id] = {
-                realizedProfit: 0,
-                costBasis: buyCost,
-                fee,
-                soldShares: 0
-            };
-
+            lots.push({ id: t.id, shares: t.qty, unitCost: buyCost / t.qty });
+            shares += t.qty; cost += buyCost;
+            details[t.id] = { realizedProfit: 0, costBasis: buyCost, fee, soldShares: 0 };
         } else {
-            // 賣出股數不得超過當下持股
-            if (shares <= 0 || t.qty > shares) {
-                return {
-                    valid: false,
-                    shares,
-                    cost,
-                    realized,
-                    details
-                };
-            }
-
-            let remaining = t.qty;
-            let costBasis = 0;
-
-            // FIFO：先消耗最早買入的 lot
+            if (shares <= 0 || t.qty > shares) return { valid: false, shares, cost, realized, details };
+            let remaining = t.qty, costBasis = 0;
             while (remaining > 0) {
                 const lot = lots[0];
-
-                if (!lot) {
-                    return {
-                        valid: false,
-                        shares,
-                        cost,
-                        realized,
-                        details
-                    };
-                }
-
-                const usedShares = Math.min(
-                    remaining,
-                    lot.shares
-                );
-
-                costBasis += usedShares * lot.unitCost;
-
-                lot.shares -= usedShares;
-                remaining -= usedShares;
-
-                if (lot.shares <= 0) {
-                    lots.shift();
-                }
+                if (!lot) return { valid: false, shares, cost, realized, details };
+                const used = Math.min(remaining, lot.shares);
+                costBasis += used * lot.unitCost;
+                if (details[lot.id]) details[lot.id].soldShares += used;
+                lot.shares -= used; remaining -= used;
+                if (lot.shares <= 0) lots.shift();
             }
-
-            const sellAmount = t.price * t.qty;
-            const profit = sellAmount - costBasis - fee;
-
-            shares -= t.qty;
-            cost -= costBasis;
-            realized += profit;
-
-            if (Math.abs(shares) < 1e-8) {
-                shares = 0;
-                cost = 0;
-                lots.length = 0;
-            }
-
-            details[t.id] = {
-                realizedProfit: profit,
-                costBasis,
-                fee,
-                soldShares: t.qty
-            };
+            const profit = t.price * t.qty - costBasis - fee;
+            shares -= t.qty; cost -= costBasis; realized += profit;
+            if (Math.abs(shares) < 1e-8) { shares = 0; cost = 0; lots.length = 0; }
+            details[t.id] = { realizedProfit: profit, costBasis, fee, soldShares: t.qty };
         }
     }
-
-    return {
-        valid: true,
-        shares,
-        cost: Math.max(0, cost),
-        realized,
-        details
-    };
+    return { valid: true, shares, cost: Math.max(0, cost), realized, details };
 }
-
-
 function validateLedgerForCode(code, candidate) {
     const original = transactions;
     transactions = [...original, candidate];
@@ -451,10 +409,8 @@ function addTransaction() {
     }
     if (!Number.isInteger(qty) || qty <= 0) { alert("請輸入大於 0 的整數股數"); return; }
     if (!date) { alert("請選擇交易日期"); return; }
-    if (!Number.isFinite(fee) || fee < 0) {
-        alert("手續費不可小於 0");
-        return;
-    }
+    if (!Number.isFinite(fee) || fee < 0) { alert("手續費不可小於 0"); return; }
+
     const candidate = { id: nextId, code, name: selectedStock.name, type, date, price, qty, fee };
     const check = validateLedgerForCode(code, candidate);
     if (!check.valid) {
@@ -463,10 +419,7 @@ function addTransaction() {
     }
     nextId++;
     transactions.push(candidate);
-    $("stockKeyword").value = "";
-    $("tradePrice").value = "";
-    $("qty").value = "";
-    $("tradeFee").value = "0";
+    $("stockKeyword").value = ""; $("tradePrice").value = ""; $("qty").value = ""; $("tradeFee").value = "0";
     $("tradeDate").value = todayString();
     selectedStock = null;
 
@@ -475,16 +428,31 @@ function addTransaction() {
     refreshPrices();
 }
 
-/* ============ 8. 即時股價 ============ */
-const PRICE_CONFIG = {
-    workerUrl: "",      // 選填：你自己的 Cloudflare Worker 網址
-    finmindToken: "",   // 選填：FinMind token
-    corsProxies: [
-        u => "https://corsproxy.io/?url=" + enc(u),
-        u => "https://api.allorigins.win/raw?url=" + enc(u)
-    ]
-};
-let refreshing = false, autoTimer = null;
+/* ============ 8. 股價：兩支 API（盤中即時／收盤資料） ============ */
+function taipeiNow() {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+        timeZone: "Asia/Taipei", hour12: false, weekday: "short",
+        hour: "2-digit", minute: "2-digit", year: "numeric", month: "2-digit", day: "2-digit"
+    }).formatToParts(new Date());
+    const o = Object.fromEntries(parts.map(p => [p.type, p.value]));
+    return { weekday: o.weekday, minutes: (Number(o.hour) % 24) * 60 + Number(o.minute), date: `${o.year}-${o.month}-${o.day}` };
+}
+// 盤中：週一至週五 09:00–13:35（多留幾分鐘等收盤試算價）
+function isMarketOpen() {
+    const t = taipeiNow();
+    return t.weekday !== "Sat" && t.weekday !== "Sun" && t.minutes >= 540 && t.minutes <= 815;
+}
+// 收盤資料沒有日期欄位時，推測最近一個交易日（不含國定假日判斷）
+function guessTradingDate() {
+    const t = taipeiNow();
+    const d = new Date(t.date + "T00:00:00Z");
+    const day = d.getUTCDay();
+    const todayOk = day >= 1 && day <= 5 && t.minutes >= 540;
+    if (!todayOk) {
+        do { d.setUTCDate(d.getUTCDate() - 1); } while ([0, 6].includes(d.getUTCDay()));
+    }
+    return d.toISOString().slice(0, 10);
+}
 
 async function fetchJson(url, ms = 8000) {
     const ctrl = new AbortController();
@@ -495,15 +463,17 @@ async function fetchJson(url, ms = 8000) {
         return await res.json();
     } finally { clearTimeout(timer); }
 }
+
+// API ①：證交所即時行情（盤中用）。成交價 → 最佳買價 → 昨收
 function parseMis(json) {
     const quotes = {};
     (json.msgArray || []).forEach(item => {
-        const prev = parseFloat(item.y);                 // 昨收
-        let p = parseFloat(item.z);                      // 當盤成交價
+        const prev = parseFloat(item.y);
+        let p = parseFloat(item.z);
         if (!(p > 0)) p = parseFloat((item.b || "").split("_")[0]);
         if (!(p > 0)) p = prev;
         if (!(p > 0)) return;
-        const d = String(item.d || "");                  // 例如 20261028
+        const d = String(item.d || "");
         quotes[item.c] = {
             price: p,
             prev: prev > 0 ? prev : null,
@@ -512,36 +482,56 @@ function parseMis(json) {
     });
     return quotes;
 }
-async function fetchFromMis(codes) {
+async function fetchRealtime(codes) {
     const exCh = codes.flatMap(c => ["tse_" + c + ".tw", "otc_" + c + ".tw"]).join("|");
     const target = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${exCh}&json=1&delay=0&_=${Date.now()}`;
     const attempts = [];
-    if (PRICE_CONFIG.workerUrl) attempts.push(() => fetchJson(PRICE_CONFIG.workerUrl + "?ex_ch=" + enc(exCh)));
+    if (PRICE_CONFIG.workerUrl) attempts.push(() => fetchJson(`${PRICE_CONFIG.workerUrl}/quote?ex_ch=${enc(exCh)}`));
     PRICE_CONFIG.corsProxies.forEach(p => attempts.push(() => fetchJson(p(target))));
     for (const run of attempts) {
         try {
-            const prices = parseMis(await run());
-            if (Object.keys(prices).length) return prices;
+            const quotes = parseMis(await run());
+            if (Object.keys(quotes).length) return quotes;
         } catch (e) { console.warn("即時行情來源失敗：", e.message); }
     }
     return {};
 }
-async function fetchFromFinMind(code) {
+
+// API ②：證交所／櫃買中心每日收盤資料（經你的 Worker /close）
+async function fetchClose(codes) {
+    if (!PRICE_CONFIG.workerUrl) return {};
     try {
-        const start = new Date(Date.now() - 10 * 86400000).toISOString().slice(0, 10);
-        let url = `https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=${code}&start_date=${start}`;
-        if (PRICE_CONFIG.finmindToken) url += "&token=" + PRICE_CONFIG.finmindToken;
-        const json = await fetchJson(url);
-        const rows = json.data || [];
-        const last = rows.at(-1), before = rows.at(-2);
-        if (!(last && last.close > 0)) return null;
-        return {
-            price: Number(last.close),
-            prev: before && before.close > 0 ? Number(before.close) : null,
-            date: last.date || null
-        };
-    } catch (e) { console.warn("FinMind 失敗：", code, e.message); return null; }
+        const j = await fetchJson(`${PRICE_CONFIG.workerUrl}/close?codes=${enc(codes.join(","))}`);
+        const date = guessTradingDate();
+        const out = {};
+        codes.forEach(c => {
+            const q = j[c];
+            if (q && q.price > 0) out[c] = { price: Number(q.price), prev: q.prev > 0 ? Number(q.prev) : null, date };
+        });
+        return out;
+    } catch (e) { console.warn("收盤資料來源失敗：", e.message); return {}; }
 }
+
+// 最後備援：FinMind 日資料
+async function fetchFinMind(codes) {
+    const out = {};
+    for (const code of codes) {
+        try {
+            const start = new Date(Date.now() - 10 * 86400000).toISOString().slice(0, 10);
+            let url = `https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=${code}&start_date=${start}`;
+            if (PRICE_CONFIG.finmindToken) url += "&token=" + PRICE_CONFIG.finmindToken;
+            const rows = (await fetchJson(url)).data || [];
+            const last = rows.at(-1), before = rows.at(-2);
+            if (last && last.close > 0) {
+                out[code] = { price: Number(last.close), prev: before && before.close > 0 ? Number(before.close) : null, date: last.date || null };
+            }
+        } catch (e) { console.warn("FinMind 失敗：", code, e.message); }
+    }
+    return out;
+}
+
+const SOURCE_LABEL = { mis: "即時行情", close: "收盤資料", finmind: "FinMind 日收盤" };
+
 async function refreshPrices() {
     if (refreshing) return;
     const codes = [...new Set(transactions.map(t => t.code))];
@@ -551,12 +541,17 @@ async function refreshPrices() {
     $("refreshBtn").disabled = true;
     status.className = "price-status"; status.textContent = "更新中…";
 
-    const quotes = await fetchFromMis(codes);
-    let usedBackup = false;
-    for (const code of codes.filter(c => !quotes[c])) {
-        const q = await fetchFromFinMind(code);
-        if (q) { quotes[code] = q; usedBackup = true; }
+    // 盤中先用即時行情；非盤中先用收盤資料。失敗再換另一支，最後才用 FinMind
+    const order = isMarketOpen() ? ["mis", "close", "finmind"] : ["close", "mis", "finmind"];
+    const fetchers = { mis: fetchRealtime, close: fetchClose, finmind: fetchFinMind };
+    const quotes = {}, used = new Set();
+    for (const src of order) {
+        const need = codes.filter(c => !quotes[c]);
+        if (!need.length) break;
+        const got = await fetchers[src](need);
+        Object.entries(got).forEach(([c, q]) => { quotes[c] = q; used.add(src); });
     }
+
     Object.entries(quotes).forEach(([code, q]) => {
         currentPrices[code] = q.price;
         if (q.prev) prevCloses[code] = q.prev;
@@ -564,13 +559,15 @@ async function refreshPrices() {
     });
     const failed = codes.filter(c => !quotes[c]);
     renderStocks();
+    if (!failed.length) maybeSaveSnapshot();
 
     const time = new Date().toLocaleTimeString("zh-TW", { hour12: false });
+    const labels = [...used].map(s => SOURCE_LABEL[s]).join("、");
     if (failed.length) {
         status.className = "price-status error";
         status.textContent = `⚠️ ${time} 更新 ${codes.length - failed.length}/${codes.length} 檔，失敗：${failed.join("、")}（沿用舊股價）`;
     } else {
-        status.textContent = `✅ ${time} 已更新 ${codes.length} 檔` + (usedBackup ? "（部分為日收盤價）" : "");
+        status.textContent = `✅ ${time} 已更新 ${codes.length} 檔｜來源：${labels}`;
     }
     $("refreshBtn").disabled = false;
     refreshing = false;
@@ -578,10 +575,13 @@ async function refreshPrices() {
 function setAutoRefresh() {
     clearInterval(autoTimer);
     const ms = Number($("autoRefresh").value);
-    if (ms > 0) { autoTimer = setInterval(refreshPrices, ms); refreshPrices(); }
+    if (ms > 0) {
+        autoTimer = setInterval(() => { if (isMarketOpen()) refreshPrices(); }, ms);
+        refreshPrices();
+    }
 }
 
-/* ============ 9. 列表渲染 ============ */
+/* ============ 9. 持股總表與每日快照 ============ */
 function groupStocks() {
     const groups = {};
     [...new Set(transactions.map(t => t.code))].forEach(code => {
@@ -591,7 +591,7 @@ function groupStocks() {
         const value = ledger.shares * current;
         const unrealized = value - ledger.cost;
 
-        // 當日損益：以「行情日期」為界，之前的持股用昨收當基準，當日交易用成交價
+        // 當日損益：以行情日期為界，之前的持股用昨收當基準，當日交易用成交價
         const prev = prevCloses[code], quoteDate = quoteDates[code];
         let dayPnl = null, dayBase = 0;
         if (current > 0 && prev > 0 && quoteDate) {
@@ -615,13 +615,57 @@ function groupStocks() {
             code, name: items[0].name, items, shares: ledger.shares, cost: ledger.cost, value,
             realized: ledger.realized, unrealized, profit: ledger.realized + unrealized,
             dayPnl, dayBase,
-            totalBuyCost: items
-                .filter(t => t.type === "buy")
-                .reduce((s, t) => s + t.price * t.qty + (Number(t.fee) || 0), 0)
+            proceeds: items.filter(t => t.type === "sell").reduce((s, t) => s + t.price * t.qty - (Number(t.fee) || 0), 0),
+            totalBuyCost: items.filter(t => t.type === "buy").reduce((s, t) => s + t.price * t.qty + (Number(t.fee) || 0), 0)
         };
     });
     return groups;
 }
+
+function buildSnapshotRows(date) {
+    const groups = Object.values(groupStocks()).sort((a, b) => a.code.localeCompare(b.code));
+    const held = groups.filter(g => g.shares > 0);
+    const rows = [];
+    const add = (scope, code, name, shares, cost, value, profit, base) => rows.push({
+        date, scope, code, name, shares: r2(shares), cost: r2(cost), value: r2(value),
+        profit: r2(profit), ratio: base > 0 ? r2(profit / base * 100) : 0
+    });
+    const sum = (list, f) => list.reduce((s, g) => s + f(g), 0);
+
+    // 含已賣出：把賣掉的部分也算進帳裡
+    //   成本＝累計買入成本；總價值＝持股市值＋賣出實收金額；獲益＝總價值 − 成本（＝已實現＋未實現）
+    groups.forEach(g => add(SCOPE_ALL, g.code, g.name, g.shares, g.totalBuyCost, g.value + g.proceeds, g.profit, g.totalBuyCost));
+    add(SCOPE_ALL, "ALL", "全部合計", sum(groups, g => g.shares), sum(groups, g => g.totalBuyCost),
+        sum(groups, g => g.value + g.proceeds), sum(groups, g => g.profit), sum(groups, g => g.totalBuyCost));
+    // 未含已賣出：只看目前持有，獲益＝未實現損益
+    held.forEach(g => add(SCOPE_HELD, g.code, g.name, g.shares, g.cost, g.value, g.unrealized, g.cost));
+    add(SCOPE_HELD, "ALL", "全部合計", sum(held, g => g.shares), sum(held, g => g.cost), sum(held, g => g.value),
+        sum(held, g => g.unrealized), sum(held, g => g.cost));
+    return rows;
+}
+const rowsSig = rows => rows
+    .map(r => [r.date, r.scope, r.code, r.shares, r2(r.cost), r2(r.value), r2(r.profit), r2(r.ratio)].join("|"))
+    .sort().join("\n");
+
+function maybeSaveSnapshot() {
+    if (!sheetId) return;
+    const groups = Object.values(groupStocks());
+    if (!groups.length) return;
+    const heldGroups = groups.filter(g => g.shares > 0);
+    if (heldGroups.some(g => !(currentPrices[g.code] > 0))) return;   // 沒有股價就不寫，避免寫入 0
+
+    const date = heldGroups.map(g => quoteDates[g.code]).filter(Boolean).sort().at(-1) || todayString();
+    const rows = buildSnapshotRows(date);
+    const old = snapshots.filter(s => s.date === date);
+    if (rowsSig(old) === rowsSig(rows)) return;                       // 沒變就不寫
+    if (isMarketOpen() && Date.now() - lastSnapWrite < 300000) return; // 盤中最多每 5 分鐘寫一次
+
+    snapshots = snapshots.filter(s => s.date !== date).concat(rows)
+        .sort((a, b) => a.date.localeCompare(b.date) || a.scope.localeCompare(b.scope) || a.code.localeCompare(b.code));
+    renderChart();
+    persistSnapshots();
+}
+
 function updateFilterOptions() {
     const filter = $("stockFilter");
     const old = filter.value;
@@ -634,6 +678,7 @@ function updateFilterOptions() {
     });
     filter.value = (old === "all" || groups[old]) ? old : "all";
 }
+
 function renderStocks() {
     const list = $("stockList");
     const all = Object.values(groupStocks()).sort((a, b) => a.code.localeCompare(b.code));
@@ -644,14 +689,15 @@ function renderStocks() {
     $("invested").textContent = money(all.reduce((s, g) => s + g.cost, 0));
     $("stockCount").textContent = money(all.reduce((s, g) => s + g.shares, 0));
     $("tradeCount").textContent = all.length;
-    $("totalProfit").textContent = (totalProfit > 0 ? "+" : "") + money(totalProfit);
+    $("totalProfit").textContent = signed(totalProfit);
     $("totalProfit").className = profitClass(totalProfit);
+
     const dayList = all.filter(g => g.dayPnl !== null);
     if (dayList.length) {
-        const dayPnl = Math.round(dayList.reduce((s, g) => s + g.dayPnl, 0) * 100) / 100;
+        const dayPnl = r2(dayList.reduce((s, g) => s + g.dayPnl, 0));
         const dayBase = dayList.reduce((s, g) => s + g.dayBase, 0);
-        const dayRate = dayBase > 0 ? Math.round(dayPnl / dayBase * 10000) / 100 : 0;
-        $("dayProfit").textContent = (dayPnl > 0 ? "+" : "") + money(dayPnl);
+        const dayRate = dayBase > 0 ? r2(dayPnl / dayBase * 100) : 0;
+        $("dayProfit").textContent = signed(dayPnl);
         $("dayProfit").className = profitClass(dayPnl);
         $("dayRate").textContent = (dayRate > 0 ? "+" : "") + percent(dayRate);
         $("dayRate").className = profitClass(dayRate);
@@ -663,11 +709,13 @@ function renderStocks() {
     const visible = all.filter(g => filter === "all" || g.code === filter);
     if (!visible.length) {
         const tr = document.createElement("tr");
-        tr.innerHTML = '<td colspan="7"><div class="empty-state">🌱 目前還沒有交易紀錄，新增一筆買入開始追蹤吧！</div></td>';
+        tr.innerHTML = '<td colspan="9"><div class="empty-state">🌱 目前還沒有交易紀錄，新增一筆買入開始追蹤吧！</div></td>';
         list.appendChild(tr); return;
     }
     visible.forEach(g => {
         const ratio = g.totalBuyCost > 0 ? g.profit / g.totalBuyCost * 100 : 0;
+        const hasDay = g.dayPnl !== null;
+        const dayRate = hasDay && g.dayBase > 0 ? g.dayPnl / g.dayBase * 100 : 0;
         const open = expandedStocks.has(g.code);
         const tr = document.createElement("tr");
         tr.className = "stock-row";
@@ -677,23 +725,26 @@ function renderStocks() {
             <td>${money(g.shares)}</td>
             <td>${money(g.cost)}</td>
             <td>${money(g.value)}</td>
-            <td class="${profitClass(g.profit)}">${g.profit > 0 ? "+" : ""}${money(g.profit)}</td>
+            <td class="${hasDay ? profitClass(g.dayPnl) : ""}">${hasDay ? signed(r2(g.dayPnl)) : "—"}</td>
+            <td class="${hasDay ? profitClass(dayRate) : ""}">${hasDay ? (dayRate > 0 ? "+" : "") + percent(dayRate) : "—"}</td>
+            <td class="${profitClass(g.profit)}">${signed(g.profit)}</td>
             <td class="${profitClass(ratio)}">${percent(ratio)}</td>`;
         list.appendChild(tr);
         if (open) list.appendChild(createDetailRow(g));
     });
 }
+
 function createDetailRow(group) {
     const row = document.createElement("tr");
     row.className = "detail-row";
-    const cell = document.createElement("td"); cell.colSpan = 7;
+    const cell = document.createElement("td"); cell.colSpan = 9;
     const title = document.createElement("div"); title.className = "detail-title";
     title.textContent = `${group.code} ${group.name}｜買入／賣出交易明細`;
     const hint = document.createElement("p"); hint.className = "table-hint";
-    hint.textContent = "成本均價含手續費：買入為該筆買入均價，賣出為先進先出（FIFO）對應的成本均價。買入單筆損益為未實現損益；刪除歷史交易可能影響後續賣出的成本與損益。";
+    hint.textContent = "付出成本＝股數 × 成本均價（含手續費）。賣出的成本均價為先進先出（FIFO）對應的買入成本。買入單筆損益為未實現損益；刪除歷史交易可能影響後續賣出的成本與損益。";
     const wrap = document.createElement("div"); wrap.className = "detail-table table-wrap";
     const table = document.createElement("table");
-    table.innerHTML = `<thead><tr><th>日期</th><th>買入／賣出</th><th>股數</th><th>成交價</th><th>成本均價</th><th>現價</th><th>手續費</th><th>單筆獲益金額</th><th>單筆獲益百分比</th><th>操作</th></tr></thead><tbody></tbody>`;
+    table.innerHTML = `<thead><tr><th>日期</th><th>買入／賣出</th><th>股數</th><th>成交價</th><th>成本均價</th><th>付出成本</th><th>現價</th><th>手續費</th><th>單筆獲益金額</th><th>單筆獲益百分比</th><th>操作</th></tr></thead><tbody></tbody>`;
     const tbody = table.querySelector("tbody");
     const items = [...group.items].sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id);
     const ledger = getLedger(group.code);
@@ -701,26 +752,31 @@ function createDetailRow(group) {
 
     items.forEach(item => {
         const isBuy = item.type === "buy";
-        const info = ledger.details?.[item.id] || { realizedProfit: 0, costBasis: 0 };
-        const avgCost = info.costBasis > 0 ? info.costBasis / item.qty : 0;
+        const info = ledger.details?.[item.id];
+        const paid = info ? info.costBasis : 0;                 // 付出成本
+        const avgCost = paid > 0 ? paid / item.qty : 0;         // 成本均價
+        const left = isBuy ? item.qty - (info?.soldShares || 0) : 0;   // 這批還剩幾股
         let profit, ratio;
         if (isBuy) {
-            const buyCost = item.price * item.qty + (Number(item.fee) || 0);
-            profit = current * item.qty - buyCost;
-            ratio = buyCost > 0 ? profit / buyCost * 100 : 0;
+            profit = left > 0 && current > 0 ? (current - avgCost) * left : 0;
+            ratio = left > 0 && avgCost > 0 ? profit / (avgCost * left) * 100 : 0;
         } else {
-            profit = info.realizedProfit;
-            ratio = info.costBasis > 0 ? profit / info.costBasis * 100 : 0;
+            profit = info ? info.realizedProfit : 0;
+            ratio = paid > 0 ? profit / paid * 100 : 0;
         }
+        const leftTag = isBuy && left < item.qty
+            ? `<span class="left-tag ${left > 0 ? "" : "sold-out"}">${left > 0 ? `剩 ${money(left)} 股` : "已全數賣出"}</span>`
+            : "";
         const tr = document.createElement("tr");
         tr.innerHTML = `<td></td>
             <td><span class="type-badge ${isBuy ? "type-buy" : "type-sell"}">${isBuy ? "🟢 買入" : "🌸 賣出"}</span></td>
-            <td>${money(item.qty)}</td>
+            <td>${money(item.qty)}${leftTag}</td>
             <td>${money(item.price)}</td>
             <td>${avgCost > 0 ? money(avgCost) : "-"}</td>
-            <td>${current > 0 ? money(current) : "-"}</td>
+            <td>${paid > 0 ? money(paid) : "-"}</td>
+            <td>${isBuy && current > 0 ? money(current) : "-"}</td>
             <td></td>
-            <td class="${profitClass(profit)}">${profit > 0 ? "+" : ""}${money(profit)}</td>
+            <td class="${profitClass(profit)}">${signed(profit)}</td>
             <td class="${profitClass(ratio)}">${percent(ratio)}</td>
             <td><button class="delete-btn" data-action="delete" data-id="${item.id}" data-code="${esc(group.code)}">刪除</button></td>`;
 
@@ -761,14 +817,127 @@ function createDetailRow(group) {
         });
 
         tr.children[0].appendChild(dateInput);
-        tr.children[6].appendChild(feeInput);   // 手續費欄位位置已改為第 7 欄（index 6）
+        tr.children[7].appendChild(feeInput);   // 手續費欄＝第 8 欄（index 7）
         tbody.appendChild(tr);
     });
     wrap.appendChild(table); cell.append(title, hint, wrap); row.appendChild(cell);
     return row;
 }
 
-/* ============ 10. 事件綁定 ============ */
+/* ============ 10. 折線圖（純 SVG，不需外部套件） ============ */
+const METRIC_LABEL = { profit: "累計獲益金額", ratio: "獲益百分比", value: "當前總價值", cost: "剩餘持股成本" };
+const SERIES = [
+    { scope: SCOPE_ALL, fill: "#F2A497", line: "#F2A497", dash: "" },
+    { scope: SCOPE_HELD, fill: "#A8D3E6", line: "#5CB6DC", dash: "9 6" }
+];
+const EMPTY_CHART = `<div class="empty-state">
+    <svg viewBox="0 0 100 100" width="90" height="90" aria-hidden="true">
+        <rect x="10" y="14" width="80" height="68" rx="12" fill="#fff" stroke="#3E3A39" stroke-width="3" />
+        <circle cx="38" cy="44" r="3.5" fill="#3E3A39" /><circle cx="62" cy="44" r="3.5" fill="#3E3A39" />
+        <path d="M38 62 Q50 52 62 62" fill="none" stroke="#3E3A39" stroke-width="3.5" stroke-linecap="round" />
+        <path d="M30 90 H70" stroke="#3E3A39" stroke-width="3" stroke-linecap="round" />
+    </svg><br>還沒有快照紀錄喔～<br>到「持股列表」更新一次股價，就會自動記錄今天的數字。</div>`;
+
+function updateChartOptions() {
+    const sel = $("chartStock");
+    const old = sel.value || "ALL";
+    const names = new Map();
+    snapshots.forEach(s => { if (s.code !== "ALL") names.set(s.code, s.name); });
+    const codes = [...names.keys()].sort();
+    const sig = codes.join(",");
+    if (sel.dataset.sig === sig) return;
+    sel.dataset.sig = sig;
+    sel.innerHTML = '<option value="ALL">全部合計</option>';
+    codes.forEach(c => {
+        const o = document.createElement("option");
+        o.value = c; o.textContent = c + " " + names.get(c);
+        sel.appendChild(o);
+    });
+    sel.value = (old === "ALL" || names.has(old)) ? old : "ALL";
+}
+
+function niceScale(min, max, count = 5) {
+    if (min === max) { const p = Math.abs(min) || 1; min -= p * 0.5; max += p * 0.5; }
+    const rough = (max - min) / (count - 1);
+    const mag = Math.pow(10, Math.floor(Math.log10(rough)));
+    const norm = rough / mag;
+    const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag;
+    const lo = Math.floor(min / step) * step, hi = Math.ceil(max / step) * step;
+    const n = Math.round((hi - lo) / step);
+    const ticks = Array.from({ length: n + 1 }, (_, i) => Math.round((lo + i * step) * 1e6) / 1e6);
+    return { lo, hi, ticks };
+}
+function axisFmt(v, metric) {
+    if (metric === "ratio") return (Math.round(v * 100) / 100) + "%";
+    const a = Math.abs(v);
+    if (a >= 1e8) return (v / 1e8).toFixed(1).replace(/\.0$/, "") + "億";
+    if (a >= 1e4) return (v / 1e4).toFixed(1).replace(/\.0$/, "") + "萬";
+    return money(v);
+}
+const valFmt = (metric, v) => metric === "ratio" ? (v > 0 ? "+" : "") + percent(v) : metric === "profit" ? signed(v) : money(v);
+
+function renderChart() {
+    if ($("panel-chart").hidden || $("appRoot").hidden) return;
+    updateChartOptions();
+    const box = $("chartBox");
+    const code = $("chartStock").value || "ALL";
+    const metric = $("chartMetric").value;
+    const days = Number($("chartRange").value);
+    const cutoff = days > 0 ? new Date(Date.now() - days * 86400000).toISOString().slice(0, 10) : "";
+
+    const rows = snapshots.filter(s => s.code === code && (!cutoff || s.date >= cutoff));
+    const dates = [...new Set(rows.map(s => s.date))].sort();
+    if (!dates.length) { box.innerHTML = EMPTY_CHART; return; }
+
+    const map = new Map(rows.map(r => [r.scope + "|" + r.date, r]));
+    const series = SERIES.map(s => ({ ...s, data: dates.map(d => map.get(s.scope + "|" + d)?.[metric] ?? null) }));
+    const vals = series.flatMap(s => s.data).filter(v => v !== null);
+    if (!vals.length) { box.innerHTML = EMPTY_CHART; return; }
+
+    let min = Math.min(...vals), max = Math.max(...vals);
+    if (metric === "profit" || metric === "ratio") { min = Math.min(min, 0); max = Math.max(max, 0); }
+    const { lo, hi, ticks } = niceScale(min, max);
+
+    const W = Math.max(300, Math.min(960, box.clientWidth - 12 || 700));
+    const H = W < 500 ? 280 : 340;
+    const L = W < 500 ? 52 : 66, R = 18, T = 18, B = 40;
+    const n = dates.length;
+    const x = i => n === 1 ? (L + W - R) / 2 : L + i * (W - L - R) / (n - 1);
+    const y = v => T + (hi - v) / (hi - lo) * (H - T - B);
+
+    let svg = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${METRIC_LABEL[metric]}折線圖">`;
+    ticks.forEach(t => {
+        svg += `<line x1="${L}" y1="${y(t)}" x2="${W - R}" y2="${y(t)}" stroke="#E7E0D5" stroke-width="1.5" stroke-dasharray="4 4"/>`;
+        svg += `<text x="${L - 8}" y="${y(t) + 4}" text-anchor="end" font-size="12" fill="#756D66">${esc(axisFmt(t, metric))}</text>`;
+    });
+    if (lo < 0 && hi > 0) svg += `<line x1="${L}" y1="${y(0)}" x2="${W - R}" y2="${y(0)}" stroke="#3E3A39" stroke-width="2"/>`;
+    svg += `<line x1="${L}" y1="${T}" x2="${L}" y2="${H - B}" stroke="#3E3A39" stroke-width="2"/>`;
+    svg += `<line x1="${L}" y1="${H - B}" x2="${W - R}" y2="${H - B}" stroke="#3E3A39" stroke-width="2"/>`;
+
+    const labelCount = Math.min(n, W < 500 ? 4 : 6);
+    const idxs = [...new Set(Array.from({ length: labelCount }, (_, k) => labelCount === 1 ? 0 : Math.round(k * (n - 1) / (labelCount - 1))))];
+    idxs.forEach(i => {
+        svg += `<text x="${x(i)}" y="${H - B + 20}" text-anchor="middle" font-size="12" fill="#756D66">${esc(dates[i].slice(5).replace("-", "/"))}</text>`;
+    });
+
+    series.forEach(s => {
+        const pts = s.data.map((v, i) => v === null ? null : [x(i), y(v), v, dates[i]]).filter(Boolean);
+        if (pts.length > 1) {
+            svg += `<path d="${pts.map((p, i) => (i ? "L" : "M") + p[0] + " " + p[1]).join(" ")}" fill="none" stroke="${s.line}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"${s.dash ? ` stroke-dasharray="${s.dash}"` : ""}/>`;
+        }
+    });
+    series.forEach(s => {
+        s.data.forEach((v, i) => {
+            if (v === null) return;
+            const info = `${dates[i]}｜${s.scope}｜${METRIC_LABEL[metric]}：${valFmt(metric, v)}`;
+            svg += `<circle cx="${x(i)}" cy="${y(v)}" r="5.5" fill="${s.fill}" stroke="#3E3A39" stroke-width="2.5" data-info="${esc(info)}"><title>${esc(info)}</title></circle>`;
+        });
+    });
+    svg += `</svg>`;
+    box.innerHTML = svg;
+}
+
+/* ============ 11. 事件綁定 ============ */
 $("loginBtn").addEventListener("click", login);
 $("connectBtn").addEventListener("click", login);
 $("logoutBtn").addEventListener("click", logout);
@@ -781,6 +950,14 @@ $("stockFilter").addEventListener("change", renderStocks);
 $("transactionType").addEventListener("change", handleTypeChange);
 $("stockKeyword").addEventListener("input", () => { selectedStock = null; searchStock(); });
 document.addEventListener("click", e => { if (!e.target.closest(".search-box")) $("searchResult").style.display = "none"; });
+document.querySelectorAll(".nav-tab").forEach(b => b.addEventListener("click", () => showTab(b.dataset.tab)));
+["chartStock", "chartMetric", "chartRange"].forEach(id => $(id).addEventListener("change", renderChart));
+$("chartBox").addEventListener("click", e => {
+    const c = e.target.closest("circle[data-info]");
+    if (c) $("chartInfo").textContent = c.getAttribute("data-info");
+});
+let resizeTimer;
+window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(renderChart, 150); });
 
 $("stockList").addEventListener("click", event => {
     const button = event.target.closest("button[data-action]");
@@ -797,7 +974,9 @@ $("stockList").addEventListener("click", event => {
         if (!confirm(`確定刪除 ${item.code} ${item.name} 的這筆${item.type === "buy" ? "買入" : "賣出"}交易嗎？`)) return;
         transactions = transactions.filter(t => t.id !== id);
         if (!getLedger(code).valid) alert("刪除後資料仍有持股不足問題，請檢查交易日期與順序。");
-        if (!transactions.some(t => t.code === code)) { delete currentPrices[code]; delete prevCloses[code]; delete quoteDates[code]; expandedStocks.delete(code); }
+        if (!transactions.some(t => t.code === code)) {
+            delete currentPrices[code]; delete prevCloses[code]; delete quoteDates[code]; expandedStocks.delete(code);
+        }
         updateFilterOptions(); renderStocks(); persist();
     }
 });
@@ -806,4 +985,5 @@ $("tradeDate").value = todayString();
 handleTypeChange();
 updateFilterOptions();
 renderStocks();
+showTab(location.hash.slice(1));
 setView();
