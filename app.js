@@ -267,7 +267,7 @@ async function init() {
         }
         if (!id) { id = await createSheet(); await useSheet(id); }
         await saveSheetId(id);
-        refreshPrices();
+        refreshPrices().then(backfillSnapshots);
     } catch (e) {
         alert("初始化失敗：" + e.message);
     } finally {
@@ -284,7 +284,7 @@ async function changeSheet() {
         if (!id) id = await createSheet();
         await useSheet(id);
         await saveSheetId(id);
-        refreshPrices();
+        refreshPrices().then(backfillSnapshots);
     } catch (e) {
         alert("無法使用該試算表：" + e.message + "\n因權限限制，本站只能存取由本站自己建立的試算表。");
     }
@@ -664,6 +664,52 @@ function maybeSaveSnapshot() {
         .sort((a, b) => a.date.localeCompare(b.date) || a.scope.localeCompare(b.scope) || a.code.localeCompare(b.code));
     renderChart();
     persistSnapshots();
+}
+
+// 補收盤價：沒登入的那幾天，用 Worker 每天存下的收盤價補算，寫回試算表
+async function backfillSnapshots() {
+    if (!sheetId || !PRICE_CONFIG.workerUrl || !transactions.length) return;
+    const codes = [...new Set(transactions.map(t => t.code))];
+    const first = transactions.map(t => t.date).sort()[0];
+    const have = new Set(snapshots.map(s => s.date));
+    let hist;
+    try {
+        // 加時間參數，避免瀏覽器拿到補資料之前快取的舊結果
+        hist = await fetchJson(`${PRICE_CONFIG.workerUrl}/history?from=${first}&codes=${enc(codes.join(","))}&_=${Date.now()}`, 15000);
+    } catch (e) { console.warn("補快照失敗：", e.message); setSync("⚠️ 補快照失敗：" + e.message, true); return; }
+
+    const dates = Object.keys(hist).sort();
+    const allTx = transactions, livePx = currentPrices;
+    const added = [], skipped = {};
+    const lastPx = {};                                         // 每檔最近一次有成交的收盤價（當天沒成交時沿用）
+    try {
+        for (const date of dates) {
+            Object.entries(hist[date] || {}).forEach(([c, v]) => { if (v && v[0] > 0) lastPx[c] = v[0]; });
+            if (have.has(date)) continue;                          // 那天已經有就跳過
+            transactions = allTx.filter(t => t.date <= date);      // 只看那天以前的交易
+            if (!transactions.length) continue;
+            currentPrices = { ...lastPx };
+            const held = Object.values(groupStocks()).filter(g => g.shares > 0);
+            const missing = held.filter(g => !(currentPrices[g.code] > 0)).map(g => g.code);
+            if (missing.length) { skipped[date] = missing; continue; }   // 缺價就不補，避免寫入 0
+            added.push(...buildSnapshotRows(date));
+        }
+    } finally {
+        transactions = allTx; currentPrices = livePx;              // 一定要還原成目前的狀態
+    }
+    console.log(`[補收盤] Worker 有 ${dates.length} 天資料（${dates[0] || "-"} ～ ${dates.at(-1) || "-"}），補上 ${new Set(added.map(r => r.date)).size} 天`, skipped);
+    const skipDays = Object.keys(skipped);
+    if (skipDays.length) {
+        const codesMissing = [...new Set(Object.values(skipped).flat())].join("、");
+        setSync(`⚠️ 有 ${skipDays.length} 天缺少 ${codesMissing} 的收盤價，沒有補上`, true);
+    }
+    if (!added.length) return;
+    const days = new Set(added.map(r => r.date)).size;
+    snapshots = snapshots.concat(added)
+        .sort((a, b) => a.date.localeCompare(b.date) || a.scope.localeCompare(b.scope) || a.code.localeCompare(b.code));
+    renderChart();
+    persistSnapshots();
+    if (!skipDays.length) setSync(`✅ 已補上 ${days} 天的價格`);
 }
 
 function updateFilterOptions() {
