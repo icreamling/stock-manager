@@ -52,7 +52,8 @@ let sheetId = null;
 let initing = false;
 let selectedStock = null;
 let transactions = [];
-let snapshots = [];         // 每日快照（來自「持股總表紀錄」分頁）
+let snapshots = [];         // 每日收盤價（來自「持股總表紀錄」分頁）
+let reviewDate = null;      // 登入時試算表裡最後一天的股價日期，補收盤價時要用收盤價重算
 let currentPrices = {}, prevCloses = {}, quoteDates = {};
 let nextId = 1;
 let saveChain = Promise.resolve();
@@ -201,6 +202,7 @@ async function useSheet(id) {
 
     transactions = rows;
     snapshots = snaps;
+    reviewDate = snaps.map(s => s.date).sort().at(-1) || null;
     nextId = rows.reduce((m, t) => Math.max(m, t.id), 0) + 1;
     sheetId = id;
     $("chartStock").dataset.sig = "";
@@ -666,50 +668,64 @@ function maybeSaveSnapshot() {
     persistSnapshots();
 }
 
-// 補收盤價：沒登入的那幾天，用 Worker 每天存下的收盤價補算，寫回試算表
+// 補收盤價：①沒登入的那幾天用 Worker 存下的收盤價補算 ②登入前最後一天的收盤（可能是盤中寫的）用收盤價重算覆蓋
 async function backfillSnapshots() {
     if (!sheetId || !PRICE_CONFIG.workerUrl || !transactions.length) return;
+    const review = reviewDate;
+    reviewDate = null;                                         // 只檢查一次
     const codes = [...new Set(transactions.map(t => t.code))];
     const first = transactions.map(t => t.date).sort()[0];
     const have = new Set(snapshots.map(s => s.date));
     let hist;
     try {
-        // 加時間參數，避免瀏覽器拿到補資料之前快取的舊結果
         hist = await fetchJson(`${PRICE_CONFIG.workerUrl}/history?from=${first}&codes=${enc(codes.join(","))}&_=${Date.now()}`, 15000);
     } catch (e) { console.warn("補快照失敗：", e.message); setSync("⚠️ 補快照失敗：" + e.message, true); return; }
 
     const dates = Object.keys(hist).sort();
     const allTx = transactions, livePx = currentPrices;
-    const added = [], skipped = {};
+    let added = [];
+    const skipped = {};
     const lastPx = {};                                         // 每檔最近一次有成交的收盤價（當天沒成交時沿用）
     try {
         for (const date of dates) {
             Object.entries(hist[date] || {}).forEach(([c, v]) => { if (v && v[0] > 0) lastPx[c] = v[0]; });
-            if (have.has(date)) continue;                          // 那天已經有就跳過
-            transactions = allTx.filter(t => t.date <= date);      // 只看那天以前的交易
+            if (have.has(date) && date !== review) continue;   // 已有快照就跳過，但最後一天要重算
+            transactions = allTx.filter(t => t.date <= date);
             if (!transactions.length) continue;
             currentPrices = { ...lastPx };
             const held = Object.values(groupStocks()).filter(g => g.shares > 0);
             const missing = held.filter(g => !(currentPrices[g.code] > 0)).map(g => g.code);
-            if (missing.length) { skipped[date] = missing; continue; }   // 缺價就不補，避免寫入 0
+            if (missing.length) { skipped[date] = missing; continue; }
             added.push(...buildSnapshotRows(date));
         }
     } finally {
-        transactions = allTx; currentPrices = livePx;              // 一定要還原成目前的狀態
+        transactions = allTx; currentPrices = livePx;          // 一定要還原成目前的狀態
     }
-    console.log(`[補收盤] Worker 有 ${dates.length} 天資料（${dates[0] || "-"} ～ ${dates.at(-1) || "-"}），補上 ${new Set(added.map(r => r.date)).size} 天`, skipped);
-    const skipDays = Object.keys(skipped);
+
+    // 最後一天如果跟收盤價算出來的一樣，就不用重寫
+    let fixed = false;
+    if (review && added.some(r => r.date === review)) {
+        const same = rowsSig(snapshots.filter(s => s.date === review)) === rowsSig(added.filter(r => r.date === review));
+        if (same) added = added.filter(r => r.date !== review);
+        else fixed = true;
+    }
+
+    const skipDays = Object.keys(skipped).filter(d => d !== review);
     if (skipDays.length) {
-        const codesMissing = [...new Set(Object.values(skipped).flat())].join("、");
+        const codesMissing = [...new Set(skipDays.flatMap(d => skipped[d]))].join("、");
         setSync(`⚠️ 有 ${skipDays.length} 天缺少 ${codesMissing} 的收盤價，沒有補上`, true);
     }
     if (!added.length) return;
-    const days = new Set(added.map(r => r.date)).size;
-    snapshots = snapshots.concat(added)
+
+    const addedDates = new Set(added.map(r => r.date));
+    snapshots = snapshots.filter(s => !addedDates.has(s.date)).concat(added)
         .sort((a, b) => a.date.localeCompare(b.date) || a.scope.localeCompare(b.scope) || a.code.localeCompare(b.code));
     renderChart();
     persistSnapshots();
-    if (!skipDays.length) setSync(`✅ 已補上 ${days} 天的價格`);
+    const newDays = addedDates.size - (fixed ? 1 : 0);
+    if (!skipDays.length) {
+        setSync("✅ " + [newDays ? `已補上 ${newDays} 天` : "", fixed ? `已用收盤價修正 ${review}` : ""].filter(Boolean).join("，"));
+    }
 }
 
 function updateFilterOptions() {
@@ -936,7 +952,11 @@ function renderChart() {
     if (!dates.length) { box.innerHTML = EMPTY_CHART; return; }
 
     const map = new Map(rows.map(r => [r.scope + "|" + r.date, r]));
-    const series = SERIES.map(s => ({ ...s, data: dates.map(d => map.get(s.scope + "|" + d)?.[metric] ?? null) }));
+    const scope = $("chartScope").value;
+    const active = SERIES.filter(s => scope === "both" || s.scope === scope);
+    $("legendAll").style.display = active.some(s => s.scope === SCOPE_ALL) ? "" : "none";
+    $("legendHeld").style.display = active.some(s => s.scope === SCOPE_HELD) ? "" : "none";
+    const series = active.map(s => ({ ...s, data: dates.map(d => map.get(s.scope + "|" + d)?.[metric] ?? null) }));
     const vals = series.flatMap(s => s.data).filter(v => v !== null);
     if (!vals.length) { box.innerHTML = EMPTY_CHART; return; }
 
@@ -997,7 +1017,7 @@ $("transactionType").addEventListener("change", handleTypeChange);
 $("stockKeyword").addEventListener("input", () => { selectedStock = null; searchStock(); });
 document.addEventListener("click", e => { if (!e.target.closest(".search-box")) $("searchResult").style.display = "none"; });
 document.querySelectorAll(".nav-tab").forEach(b => b.addEventListener("click", () => showTab(b.dataset.tab)));
-["chartStock", "chartMetric", "chartRange"].forEach(id => $(id).addEventListener("change", renderChart));
+["chartStock", "chartMetric", "chartRange", "chartScope"].forEach(id => $(id).addEventListener("change", renderChart));
 $("chartBox").addEventListener("click", e => {
     const c = e.target.closest("circle[data-info]");
     if (c) $("chartInfo").textContent = c.getAttribute("data-info");

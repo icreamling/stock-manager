@@ -291,11 +291,19 @@
                                 <option value="365">近 1 年</option>
                             </select>
                         </div>
+                        <div>
+                            <label class="field-label" for="chartScope">顯示線條</label>
+                            <select id="chartScope">
+                                <option value="both">兩條都顯示</option>
+                                <option value="含已賣出">只看含已賣出</option>
+                                <option value="未含已賣出">只看未含已賣出</option>
+                            </select>
+                        </div>
                     </div>
 
                     <div class="legend">
-                        <span><i class="dot pink"></i>含已賣出</span>
-                        <span><i class="dot blue"></i>未含已賣出（虛線）</span>
+                        <span id="legendAll"><i class="dot pink"></i>含已賣出</span>
+                        <span id="legendHeld"><i class="dot blue"></i>未含已賣出（虛線）</span>
                     </div>
                     <div class="chart-box" id="chartBox"></div>
                     <div class="sell-mode-note" id="chartInfo">點一下圖上的圓點，可以看到當天的數字。</div>
